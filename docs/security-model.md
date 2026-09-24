@@ -42,6 +42,14 @@ The system relies on a hybrid architecture combining on-chain state (Soroban) wi
 
 ---
 
+## Creator privacy (off-chain index)
+
+Owned prompts, drafts, and version writes are gated by a **signed creator
+session** (HMAC claims + Stellar Ed25519 signature). See
+[creator-privacy.md](./creator-privacy.md). Public listing endpoints must never
+serialize draft plaintext or private version content; version history remains
+metadata-only.
+
 ## Access Control Logic
 
 The `has_access` logic in the contract is the primary gatekeeper:
