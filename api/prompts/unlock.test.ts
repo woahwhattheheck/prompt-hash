@@ -66,46 +66,17 @@ vi.mock("../../server/src/services/auditTrail", () => ({
   recordAuditEvent: vi.fn(),
 }));
 
-vi.mock("../../server/src/services/webhookDispatcher", () => ({
-  dispatchEvent: vi.fn().mockResolvedValue(undefined),
+vi.mock("../../server/src/services/durableAuditQueue", () => ({
+  AuditAcceptError: class AuditAcceptError extends Error {
+    code = "AUDIT_ACCEPT_FAILED";
+  },
+  acceptCriticalUnlockAudit: vi.fn().mockResolvedValue({
+    acceptanceId: "test-acceptance-id",
+    duplicate: false,
+    degraded: false,
+  }),
+  drainCriticalAuditOutbox: vi.fn().mockResolvedValue({ drained: 0, retried: 0, dlq: 0 }),
 }));
-
-import handler from "./unlock";
-
-async function setupUnlockFixture(plaintext = "Secret prompt instructions for buyers.", ttlMs = 5 * 60 * 1000) {
-  const buyer = Keypair.random();
-  const contentHash = "a".repeat(64);
-
-  process.env.CHALLENGE_TOKEN_SECRET = "integration-test-challenge-secret";
-  process.env.UNLOCK_PUBLIC_KEY = "d".repeat(32);
-  process.env.UNLOCK_PRIVATE_KEY = "e".repeat(32);
-  process.env.PUBLIC_PROMPT_HASH_CONTRACT_ID =
-    "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-  process.env.PUBLIC_STELLAR_SIMULATION_ACCOUNT = buyer.publicKey();
-  process.env.PUBLIC_STELLAR_RPC_URL = "https://soroban-testnet.stellar.org";
-
-  const promptId = "42";
-  const challenge = createChallengeToken(
-    process.env.CHALLENGE_TOKEN_SECRET,
-    buyer.publicKey(),
-    promptId,
-    Date.now(),
-    ttlMs,
-  );
-  const signedMessage = Buffer.from(
-    buyer.sign(Buffer.from(challenge.challenge, "utf8")),
-  ).toString("base64");
-
-  hasAccessMock.mockResolvedValue(true);
-  getPromptMock.mockResolvedValue({
-    id: 42n,
-    creator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
-    title: "Test prompt",
-    contentHash,
-    encryptedPrompt: "encrypted",
-    encryptionIv: "iv",
-    wrappedKey: "wrapped",
-  });
   unwrapPromptKeyMock.mockResolvedValue(new Uint8Array(32));
   decryptPromptCiphertextMock.mockResolvedValue(plaintext);
   hashPromptPlaintextMock.mockResolvedValue(contentHash);

@@ -34,6 +34,11 @@ import { checkReplayProtection } from "../../src/lib/observability/replayProtect
 import { metrics } from "../../src/lib/observability/metrics";
 import { dispatchEvent } from "../../server/src/services/webhookDispatcher";
 import { recordAuditEvent } from "../../server/src/services/auditTrail";
+import {
+  AuditAcceptError,
+  acceptCriticalUnlockAudit,
+  drainCriticalAuditOutbox,
+} from "../../server/src/services/durableAuditQueue";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 import { validateUnlockSecrets } from "../../src/lib/validation/envValidator";
 import { unlockSchema } from "../../src/lib/validation/apiSchemas";
@@ -63,6 +68,38 @@ try {
  * Get active secrets for token verification
  * Supports multiple secrets during rotation grace period
  */
+
+/**
+ * Durably accept a critical unlock audit event before completing the outcome (#167).
+ * Fail-closed by default: on accept failure returns false and writes 503.
+ * Sets X-Audit-Acceptance-Id when an acceptance ID is available.
+ */
+async function acceptCriticalAudit(
+  res: VercelResponse,
+  input: Parameters<typeof acceptCriticalUnlockAudit>[0],
+): Promise<boolean> {
+  try {
+    const accepted = await acceptCriticalUnlockAudit(input);
+    if (accepted.acceptanceId) {
+      res.setHeader("X-Audit-Acceptance-Id", accepted.acceptanceId);
+    }
+    // Best-effort drain; acceptance is already durable in the outbox.
+    void drainCriticalAuditOutbox(5).catch(() => {});
+    return true;
+  } catch (err) {
+    if (err instanceof AuditAcceptError) {
+      res.status(503).json(
+        apiError(
+          ErrorCode.TEMPORARY_FAILURE,
+          "Audit trail unavailable. Please try again shortly.",
+        ),
+      );
+      return false;
+    }
+    throw err;
+  }
+}
+
 function getActiveSecrets(primarySecret: string): string[] {
   const secrets = [primarySecret];
   
@@ -158,15 +195,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
   if (!ipRateLimit.success) {
     req.logger.warn({ clientIp }, "Rate limit exceeded for unlock (IP)");
     metrics.trackRateLimitHit("unlock_ip", clientIp);
-    void recordAuditEvent({
-      action: "unlock_rate_limited",
-      result: "blocked",
-      promptId: promptId ? String(promptId) : null,
-      walletAddress: address ? String(address) : null,
-      requestId: req.requestId ?? null,
-      clientIp,
-      reason: "ip_rate_limit_exceeded",
-    });
+    if (
+      !(await acceptCriticalAudit(res, {
+        action: "unlock_rate_limited",
+        result: "blocked",
+        promptId: promptId ? String(promptId) : null,
+        walletAddress: address ? String(address) : null,
+        requestId: req.requestId ?? null,
+        clientIp,
+        reason: "ip_rate_limit_exceeded",
+      }))
+    ) {
+      return;
+    }
     res.setHeader("X-RateLimit-Limit", ipRateLimit.limit);
     res.setHeader("X-RateLimit-Remaining", 0);
     res.setHeader("X-RateLimit-Reset", ipRateLimit.reset);
@@ -184,15 +225,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (!walletRateLimit.success) {
       req.logger.warn({ address: redactedAddress }, "Rate limit exceeded for unlock (Wallet)");
       metrics.trackRateLimitHit("unlock_wallet", String(address));
-      void recordAuditEvent({
-        action: "unlock_rate_limited",
-        result: "blocked",
-        promptId: promptId ? String(promptId) : null,
-        walletAddress: String(address),
-        requestId: req.requestId ?? null,
-        clientIp,
-        reason: "wallet_rate_limit_exceeded",
-      });
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_rate_limited",
+          result: "blocked",
+          promptId: promptId ? String(promptId) : null,
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "wallet_rate_limit_exceeded",
+        }))
+      ) {
+        return;
+      }
       res.setHeader("X-RateLimit-Limit", walletRateLimit.limit);
       res.setHeader("X-RateLimit-Remaining", 0);
       res.setHeader("X-RateLimit-Reset", walletRateLimit.reset);
@@ -232,15 +277,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (!nonceConsumed) {
       req.logger.warn({ address: redactedAddress, promptId }, "Challenge nonce replay detected");
       metrics.trackUnlockFailure(String(address), String(promptId), "replay_detected");
-      void recordAuditEvent({
-        action: "unlock_replay_detected",
-        result: "blocked",
-        promptId: String(promptId),
-        walletAddress: String(address),
-        requestId: req.requestId ?? null,
-        clientIp,
-        reason: "nonce_reused",
-      });
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_replay_detected",
+          result: "blocked",
+          promptId: String(promptId),
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "nonce_reused",
+        }))
+      ) {
+        return;
+      }
       res.status(400).json(
         apiError(ErrorCode.TEMPORARY_FAILURE, "This unlock request has already been processed."),
       );
@@ -258,15 +307,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (!validSignature) {
       req.logger.warn({ address: redactedAddress, promptId }, "Invalid wallet signature");
       metrics.trackUnlockFailure(String(address), String(promptId), "invalid_signature");
-      void recordAuditEvent({
-        action: "unlock_invalid_signature",
-        result: "failure",
-        promptId: String(promptId),
-        walletAddress: String(address),
-        requestId: req.requestId ?? null,
-        clientIp,
-        reason: "invalid_signature",
-      });
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_invalid_signature",
+          result: "failure",
+          promptId: String(promptId),
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "invalid_signature",
+        }))
+      ) {
+        return;
+      }
       res.status(401).json(apiError(ErrorCode.INVALID_SIGNATURE, "Invalid wallet signature."));
       return;
     }
@@ -279,15 +332,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (!replayCheck.valid) {
       req.logger.warn({ address: redactedAddress, promptId }, "Replay attack detected in store");
       metrics.trackUnlockFailure(String(address), String(promptId), "replay_detected");
-      void recordAuditEvent({
-        action: "unlock_replay_detected",
-        result: "blocked",
-        promptId: String(promptId),
-        walletAddress: String(address),
-        requestId: req.requestId ?? null,
-        clientIp,
-        reason: "replay_attack",
-      });
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_replay_detected",
+          result: "blocked",
+          promptId: String(promptId),
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "replay_attack",
+        }))
+      ) {
+        return;
+      }
       res.status(400).json(
         apiError(ErrorCode.TEMPORARY_FAILURE, "This unlock request has already been processed."),
       );
@@ -301,15 +358,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (!access) {
       req.logger.warn({ address: redactedAddress, promptId }, "Prompt access denied");
       metrics.trackUnlockFailure(String(address), String(promptId), "no_access");
-      void recordAuditEvent({
-        action: "unlock_no_access",
-        result: "failure",
-        promptId: String(promptId),
-        walletAddress: String(address),
-        requestId: req.requestId ?? null,
-        clientIp,
-        reason: "no_access",
-      });
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_no_access",
+          result: "failure",
+          promptId: String(promptId),
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "no_access",
+        }))
+      ) {
+        return;
+      }
       res.status(403).json(
         apiError(ErrorCode.ACCESS_NOT_PURCHASED, "Prompt access has not been purchased."),
       );
@@ -407,15 +468,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (contentHash !== storedHash) {
       req.logger.error({ address: redactedAddress, promptId }, "Prompt integrity check failed");
       metrics.trackUnlockFailure(String(address), String(promptId), "integrity_failure");
-      void recordAuditEvent({
-        action: "unlock_integrity_failure",
-        result: "failure",
-        promptId: String(promptId),
-        walletAddress: String(address),
-        requestId: req.requestId ?? null,
-        clientIp,
-        reason: "integrity_failure",
-      });
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_integrity_failure",
+          result: "failure",
+          promptId: String(promptId),
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "integrity_failure",
+        }))
+      ) {
+        return;
+      }
       res.status(500).json(
         apiError(ErrorCode.INTEGRITY_FAILURE, "Prompt integrity check failed."),
       );
@@ -424,15 +489,19 @@ const redactedAddress = String(address).slice(0, 8) + "...";
 
     metrics.trackUnlockSuccess(String(address), String(promptId));
     req.logger.info({ address: redactedAddress, promptId }, "Prompt unlocked successfully");
-    void recordAuditEvent({
-      action: "unlock_success",
-      result: "success",
-      promptId: String(promptId),
-      walletAddress: String(address),
-      requestId: req.requestId ?? null,
-      clientIp,
-      reason: null,
-    });
+    if (
+      !(await acceptCriticalAudit(res, {
+        action: "unlock_success",
+        result: "success",
+        promptId: String(promptId),
+        walletAddress: String(address),
+        requestId: req.requestId ?? null,
+        clientIp,
+        reason: null,
+      }))
+    ) {
+      return;
+    }
 
     // Fire-and-forget webhook dispatch
     void Promise.resolve(
@@ -459,15 +528,31 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     const isMismatch = message.toLowerCase().includes("mismatch") || message.toLowerCase().includes("does not match");
     const isInvalidSig = message.toLowerCase().includes("invalid challenge token signature");
 
-    void recordAuditEvent({
-      action: isExpired ? "unlock_expired_challenge" : "unlock_error",
-      result: "failure",
-      promptId: promptId ? String(promptId) : null,
-      walletAddress: address ? String(address) : null,
-      requestId: req.requestId ?? null,
-      clientIp,
-      reason: isExpired ? "expired_challenge" : isMismatch ? "mismatch" : "error",
-    });
+    if (isExpired) {
+      if (
+        !(await acceptCriticalAudit(res, {
+          action: "unlock_expired_challenge",
+          result: "failure",
+          promptId: promptId ? String(promptId) : null,
+          walletAddress: address ? String(address) : null,
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: "expired_challenge",
+        }))
+      ) {
+        return;
+      }
+    } else {
+      void recordAuditEvent({
+        action: "unlock_error",
+        result: "failure",
+        promptId: promptId ? String(promptId) : null,
+        walletAddress: address ? String(address) : null,
+        requestId: req.requestId ?? null,
+        clientIp,
+        reason: isMismatch ? "mismatch" : "error",
+      });
+    }
 
     if (isExpired) {
       res.status(401).json(

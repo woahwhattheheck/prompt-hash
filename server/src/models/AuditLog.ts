@@ -11,6 +11,7 @@ export type AuditAction =
   | "unlock_integrity_failure"
   | "unlock_error"
   | "unlock_rate_limited"
+  | "unlock_replay_detected"
   | "kms_key_rotated"
   | "kms_break_glass_triggered"
   | "kms_key_revoked"
@@ -36,6 +37,7 @@ const auditLogSchema = new mongoose.Schema(
         "unlock_integrity_failure",
         "unlock_error",
         "unlock_rate_limited",
+        "unlock_replay_detected",
         "kms_key_rotated",
         "kms_break_glass_triggered",
         "kms_key_revoked",
