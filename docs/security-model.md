@@ -176,3 +176,10 @@ staging, production):
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API | `https://app.example.com,https://staging.example.com` |
 | `TRUSTED_PROXY_HOPS` | Number of trusted reverse-proxy hops in front of the server | `1` |
+
+## Governance vote authentication (#147)
+
+`POST` / `DELETE /api/governance/vote/:promptId` require a signed wallet
+session. Voter identity is derived only from verified session claims plus a
+Stellar signature — never from `voterWallet` body fields. See
+[governance-vote-auth.md](./governance-vote-auth.md).
