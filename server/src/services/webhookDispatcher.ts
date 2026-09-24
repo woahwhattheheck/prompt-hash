@@ -1,6 +1,12 @@
 import { createHmac, randomUUID } from "crypto";
 import WebhookSubscription from "../models/WebhookSubscription";
 import WebhookDeliveryLog from "../models/WebhookDeliveryLog";
+import {
+  buildDeliveryLogEndpointFields,
+  computeDeliveryLogExpiresAt,
+  normalizeDeliveryError,
+  normalizeHttpError,
+} from "./webhookLogPrivacy";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 2_000;
@@ -83,14 +89,21 @@ async function deliverWithRetry(
     const buyerWalletRaw = payload.data?.buyerWallet ?? payload.data?.buyer ?? null;
     const buyerWallet = buyerWalletRaw != null ? String(buyerWalletRaw).toLowerCase() : null;
 
+    const endpointFields = buildDeliveryLogEndpointFields(url);
+
     logEntry = await WebhookDeliveryLog.create({
       deliveryId: payload.deliveryId,
       subscriptionId,
       event: payload.event,
-      url,
+      // Redacted identity only — never credentials or sensitive query values (#176).
+      url: endpointFields.url,
+      endpointIdentity: endpointFields.endpointIdentity,
+      encryptedDestination: endpointFields.encryptedDestination,
+      encryptionKeyVersion: endpointFields.encryptionKeyVersion,
       status: "retrying",
       promptId,
       buyerWallet,
+      expiresAt: computeDeliveryLogExpiresAt(),
     });
   }
 
@@ -103,6 +116,8 @@ async function deliverWithRetry(
 
       if (status >= 200 && status < 300) {
         logEntry.status = "success";
+        logEntry.errorCode = null;
+        logEntry.lastError = null;
         logEntry.completedAt = new Date();
         await logEntry.save();
 
@@ -115,7 +130,9 @@ async function deliverWithRetry(
 
       if (status >= 400 && status < 500 && status !== 429) {
         logEntry.status = "failed";
-        logEntry.lastError = `HTTP ${status}`;
+        const normalized = normalizeHttpError(status);
+        logEntry.errorCode = normalized.errorCode;
+        logEntry.lastError = normalized.lastError;
         logEntry.completedAt = new Date();
         await logEntry.save();
 
@@ -130,9 +147,13 @@ async function deliverWithRetry(
         return;
       }
 
-      logEntry.lastError = `HTTP ${status}`;
+      const normalized = normalizeHttpError(status);
+      logEntry.errorCode = normalized.errorCode;
+      logEntry.lastError = normalized.lastError;
     } catch (err) {
-      logEntry.lastError = err instanceof Error ? err.message : String(err);
+      const normalized = normalizeDeliveryError(err);
+      logEntry.errorCode = normalized.errorCode;
+      logEntry.lastError = normalized.lastError;
     }
 
     const isLastAttempt = attempt === MAX_RETRIES;

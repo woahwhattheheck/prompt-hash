@@ -176,3 +176,13 @@ staging, production):
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API | `https://app.example.com,https://staging.example.com` |
 | `TRUSTED_PROXY_HOPS` | Number of trusted reverse-proxy hops in front of the server | `1` |
+
+---
+
+## Webhook Delivery Log Privacy
+
+Webhook delivery logs never persist URL credentials, sensitive query values, or raw
+network error text. Endpoints are stored as a redacted identity; the original
+destination may be encrypted at rest for operational recovery. Logs expire after
+a documented TTL (default 30 days). Details: [webhook-delivery-log-privacy.md](./webhook-delivery-log-privacy.md).
+

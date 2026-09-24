@@ -4,6 +4,7 @@ import FulfillmentRecord from "../models/FulfillmentRecord";
 import WebhookDeliveryLog from "../models/WebhookDeliveryLog";
 import ReconciliationReport, { MismatchType } from "../models/ReconciliationReport";
 import { dispatchEvent } from "./webhookDispatcher";
+import { publicDeliveryLogEndpoint } from "./webhookLogPrivacy";
 
 const RECONCILIATION_SECRET = process.env.RECONCILIATION_SECRET || "reconciliation-secret-key-123";
 
@@ -105,7 +106,7 @@ export async function runReconciliation(options: RunReconciliationOptions = {}) 
         promptId: p.promptId,
         buyerWallet: p.buyerWallet,
         txHash: p.txHash,
-        details: { deliveryId: w.deliveryId, url: w.url, lastError: w.lastError },
+        details: publicDeliveryLogEndpoint(w),
         repairStatus: "pending",
       });
     }
@@ -124,9 +125,7 @@ export async function runReconciliation(options: RunReconciliationOptions = {}) 
         promptId: "unknown",
         buyerWallet: "unknown",
         details: {
-          deliveryId: w.deliveryId,
-          url: w.url,
-          lastError: w.lastError,
+          ...publicDeliveryLogEndpoint(w),
           reason: "Delivery log has no promptId/buyerWallet correlation evidence.",
         },
         repairStatus: "skipped",
@@ -140,9 +139,7 @@ export async function runReconciliation(options: RunReconciliationOptions = {}) 
         promptId: w.promptId,
         buyerWallet: w.buyerWallet,
         details: {
-          deliveryId: w.deliveryId,
-          url: w.url,
-          lastError: w.lastError,
+          ...publicDeliveryLogEndpoint(w),
           reason: "No purchase record matches this delivery's promptId/buyerWallet.",
         },
         repairStatus: "skipped",

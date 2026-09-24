@@ -386,6 +386,7 @@ This is critical because PromptHash retries failed deliveries, which may result 
 - 4xx errors (except 429) are treated as permanent failures — no retry
 - After 10 consecutive failures, the subscription is automatically disabled
 - All delivery attempts are logged in the `WebhookDeliveryLog` collection
+- Delivery logs store a **redacted** endpoint identity (credentials and sensitive query values removed). See [webhook-delivery-log-privacy.md](./webhook-delivery-log-privacy.md) for retention (default 30 days) and encryption of the operational destination.
 
 ### Rate limiting
 

@@ -34,9 +34,36 @@ const webhookDeliveryLogSchema = new mongoose.Schema(
       lowercase: true,
       index: true,
     },
+    /**
+     * Legacy column. Always stores the redacted endpoint identity (never
+     * credentials or sensitive query values). Prefer endpointIdentity.
+     * @see issue #176
+     */
     url: {
       type: String,
       required: true,
+    },
+    /**
+     * Redacted endpoint identity: scheme/host/port/path with userinfo stripped
+     * and sensitive query values replaced by [REDACTED].
+     */
+    endpointIdentity: {
+      type: String,
+      required: true,
+    },
+    /**
+     * AES-256-GCM ciphertext of the original destination (iv.tag.ct base64).
+     * Null when WEBHOOK_DESTINATION_ENCRYPTION_KEY is unset — plaintext is never stored.
+     */
+    encryptedDestination: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    encryptionKeyVersion: {
+      type: Number,
+      default: null,
+      select: false,
     },
     status: {
       type: String,
@@ -52,6 +79,12 @@ const webhookDeliveryLogSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    /** Closed-set error code (see webhookLogPrivacy.WEBHOOK_ERROR_CODES). */
+    errorCode: {
+      type: String,
+      default: null,
+    },
+    /** Capped, sanitized error summary — never raw network/provider detail. */
     lastError: {
       type: String,
       default: null,
@@ -63,6 +96,15 @@ const webhookDeliveryLogSchema = new mongoose.Schema(
     completedAt: {
       type: Date,
       default: null,
+    },
+    /**
+     * Retention deadline. Mongo TTL index removes the document after this time.
+     * Default: 30 days (WEBHOOK_DELIVERY_LOG_TTL_DAYS).
+     */
+    expiresAt: {
+      type: Date,
+      required: true,
+      index: { expireAfterSeconds: 0 },
     },
   },
   { timestamps: true },
