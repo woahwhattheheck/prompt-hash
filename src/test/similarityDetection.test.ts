@@ -32,6 +32,14 @@ import {
   classifyScore,
   scanForSimilarity,
   SIMILARITY_THRESHOLDS,
+  decidePublication,
+  flagToDecision,
+  buildCreatorFeedback,
+  evaluatePublishSimilarity,
+  applyMaintainerOverride,
+  withOverride,
+  PUBLICATION_THRESHOLDS,
+  type PublishSimilarityResult,
 } from "../../server/src/services/similarityDetection";
 
 beforeEach(() => {
@@ -177,14 +185,13 @@ describe("scanForSimilarity", () => {
 
   it("flags highly_similar when score >= 0.90", async () => {
     const content =
-      "Write a professional marketing email for a SaaS launch. Include features, pricing, and a CTA.";
-    // Return an existing prompt that is nearly identical.
+      "Write a professional marketing email for a SaaS launch. Include features, pricing, and a call to action.";
+    // Exact duplicate of an existing listing → block / highly_similar.
     mockFindLean.mockResolvedValueOnce([
       {
         onChainId: "50",
         title: "Marketing Email",
-        content:
-          "Write a professional marketing email for a SaaS launch. Include features, pricing, and a call to action.",
+        content,
       },
     ]);
 
@@ -206,20 +213,21 @@ describe("scanForSimilarity", () => {
 
   it("flags suspicious when score is between 0.70 and 0.90", async () => {
     const content =
-      "Write a step by step guide on how to start a podcast for beginners, covering equipment, recording, and distribution platforms.";
+      "Create a weekly content calendar for a B2B SaaS Twitter account covering product updates, customer stories, and industry tips with suggested post times.";
     mockFindLean.mockResolvedValueOnce([
       {
         onChainId: "51",
-        title: "Podcast Guide",
+        title: "Content Calendar",
         content:
-          "A comprehensive beginner guide to starting a podcast covering equipment, recording, editing, and uploading to streaming platforms.",
+          "Create a weekly content calendar for a B2B SaaS Twitter account covering product launches, customer testimonials, and industry news with recommended posting times.",
       },
     ]);
 
     const result = await scanForSimilarity("103", content);
 
-    // Score is in the suspicious range: may vary by tokenization
-    expect(["suspicious", "highly_similar"]).toContain(result.flag);
+    expect(result.flag).toBe("suspicious");
+    expect(result.score).toBeGreaterThanOrEqual(0.7);
+    expect(result.score).toBeLessThan(0.9);
   });
 
   it("sets similarTo to null when flag is clean", async () => {
@@ -272,5 +280,195 @@ describe("scanForSimilarity", () => {
 
     expect(result.similarTo).toBe("61");
     expect(result.score).toBeCloseTo(1.0, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Publication decisions (Issue #242) — allow / review / block / override
+// ---------------------------------------------------------------------------
+
+
+describe("decidePublication", () => {
+  it("allows scores below the review threshold", () => {
+    expect(decidePublication(0)).toBe("allow");
+    expect(decidePublication(PUBLICATION_THRESHOLDS.REVIEW - 0.01)).toBe("allow");
+  });
+
+  it("sends mid-range scores to review", () => {
+    expect(decidePublication(PUBLICATION_THRESHOLDS.REVIEW)).toBe("review");
+    expect(decidePublication(0.85)).toBe("review");
+    expect(decidePublication(PUBLICATION_THRESHOLDS.BLOCK - 0.01)).toBe("review");
+  });
+
+  it("blocks scores at or above the block threshold", () => {
+    expect(decidePublication(PUBLICATION_THRESHOLDS.BLOCK)).toBe("block");
+    expect(decidePublication(0.99)).toBe("block");
+  });
+});
+
+describe("flagToDecision", () => {
+  it("maps detection flags to publication decisions", () => {
+    expect(flagToDecision("clean")).toBe("allow");
+    expect(flagToDecision("suspicious")).toBe("review");
+    expect(flagToDecision("highly_similar")).toBe("block");
+  });
+});
+
+describe("buildCreatorFeedback", () => {
+  it("returns actionable steps for block", () => {
+    const feedback = buildCreatorFeedback("block", 0.95, "42");
+    expect(feedback.title.toLowerCase()).toContain("blocked");
+    expect(feedback.actions.length).toBeGreaterThan(0);
+    expect(feedback.similarTo).toBe("42");
+    expect(feedback.scorePercent).toBe(95);
+  });
+
+  it("returns review guidance with actions", () => {
+    const feedback = buildCreatorFeedback("review", 0.8, "7");
+    expect(feedback.decision).toBe("review");
+    expect(feedback.actions.length).toBeGreaterThan(0);
+  });
+
+  it("returns a clean pass message for allow", () => {
+    const feedback = buildCreatorFeedback("allow", 0.2, null);
+    expect(feedback.decision).toBe("allow");
+    expect(feedback.actions).toEqual([]);
+  });
+});
+
+describe("evaluatePublishSimilarity — allow / review / block", () => {
+  it("allows unrelated drafts", () => {
+    const result = evaluatePublishSimilarity(
+      "Write a Python script that scrapes stock prices from Yahoo Finance and emails a daily summary.",
+      [
+        {
+          onChainId: "1",
+          title: "Dragon Story",
+          content: "A magical story about a dragon who collects socks and learns to share.",
+        },
+      ],
+    );
+    expect(result.decision).toBe("allow");
+    expect(result.flag).toBe("clean");
+    expect(result.feedback.decision).toBe("allow");
+  });
+
+  it("blocks near-duplicate drafts", () => {
+    const content =
+      "Write a professional marketing email for a SaaS launch. Include features, pricing, and a call to action.";
+    const result = evaluatePublishSimilarity(content, [
+      {
+        onChainId: "50",
+        title: "Marketing Email",
+        content:
+          "Write a professional marketing email for a SaaS launch. Include features, pricing, and a call to action.",
+      },
+    ]);
+    expect(result.decision).toBe("block");
+    expect(result.flag).toBe("highly_similar");
+    expect(result.similarTo).toBe("50");
+    expect(result.feedback.actions.length).toBeGreaterThan(0);
+  });
+
+  it("sends moderately overlapping drafts to review", () => {
+    const content =
+      "Write a detailed onboarding email sequence for new SaaS users covering welcome, setup checklist, and first-week tips.";
+    const result = evaluatePublishSimilarity(content, [
+      {
+        onChainId: "51",
+        title: "Onboarding Sequence",
+        content:
+          "Write a detailed onboarding email sequence for new SaaS customers covering welcome message, setup steps, and first week advice.",
+      },
+    ]);
+    expect(result.decision).toBe("review");
+    expect(result.flag).toBe("suspicious");
+    expect(result.feedback.summary.length).toBeGreaterThan(0);
+  });
+});
+
+describe("applyMaintainerOverride + withOverride", () => {
+  const blocked: PublishSimilarityResult = {
+    flag: "highly_similar",
+    score: 0.94,
+    similarTo: "50",
+    decision: "block",
+    feedback: buildCreatorFeedback("block", 0.94, "50"),
+  };
+
+  it("records an override audit entry from block → allow", () => {
+    const override = applyMaintainerOverride({
+      promptId: "102",
+      actorAddress: "GABCDEF",
+      previousDecision: "block",
+      newDecision: "allow",
+      reason: "False positive — shared boilerplate only",
+      score: 0.94,
+      similarTo: "50",
+      previousVersion: 1,
+    });
+
+    expect(override.previousDecision).toBe("block");
+    expect(override.newDecision).toBe("allow");
+    expect(override.decisionVersion).toBe(2);
+    expect(override.actorAddress).toBe("gabcdef");
+    expect(override.reason).toContain("False positive");
+    expect(override.at).toMatch(/^\d{4}-/);
+  });
+
+  it("applies override to the publish result without mutating the original", () => {
+    const override = applyMaintainerOverride({
+      promptId: "102",
+      actorAddress: "GABCDEF",
+      previousDecision: "block",
+      newDecision: "allow",
+      reason: "Maintainer clearing false positive",
+      score: blocked.score,
+      similarTo: blocked.similarTo,
+    });
+
+    const next = withOverride(blocked, override);
+    expect(next.decision).toBe("allow");
+    expect(next.flag).toBe("clean");
+    expect(next.overridden).toBe(true);
+    expect(next.similarTo).toBeNull();
+    expect(blocked.decision).toBe("block");
+  });
+
+  it("rejects overrides missing a reason or actor", () => {
+    expect(() =>
+      applyMaintainerOverride({
+        promptId: "1",
+        actorAddress: "",
+        previousDecision: "block",
+        newDecision: "allow",
+        reason: "ok",
+        score: 0.9,
+      }),
+    ).toThrow(/actorAddress/);
+
+    expect(() =>
+      applyMaintainerOverride({
+        promptId: "1",
+        actorAddress: "GABC",
+        previousDecision: "block",
+        newDecision: "allow",
+        reason: "   ",
+        score: 0.9,
+      }),
+    ).toThrow(/reason/);
+  });
+
+  it("rejects no-op overrides that do not change the decision", () => {
+    expect(() =>
+      applyMaintainerOverride({
+        promptId: "1",
+        actorAddress: "GABC",
+        previousDecision: "block",
+        newDecision: "block",
+        reason: "noop",
+        score: 0.9,
+      }),
+    ).toThrow(/must change/);
   });
 });

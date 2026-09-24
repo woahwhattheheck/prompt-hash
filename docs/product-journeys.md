@@ -51,6 +51,8 @@ The creator fills in the listing form at `/sell`:
 
 A listing quality checklist runs before submission to catch weak or missing metadata. Required fields block submission; recommended improvements show as non-blocking warnings.
 
+Before the on-chain submit, a **similarity publish gate** compares the draft to existing listings (`allow` / `review` / `block`). Blocked drafts cannot publish until revised or overridden; review requires an explicit creator acknowledgment. See [similarity-publish-gate.md](./similarity-publish-gate.md).
+
 ### Step 3 — Browser-side encryption
 
 When the creator clicks "Create prompt listing", the browser:

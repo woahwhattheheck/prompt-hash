@@ -37,6 +37,11 @@ import {
   createPromptSchema,
 } from "@/lib/validation/listing";
 import { MarkdownContent } from "@/components/MarkdownContent";
+import { SimilarityPublishFeedback } from "@/components/sell/SimilarityPublishFeedback";
+import {
+  checkPublishSimilarity,
+  type PublishSimilarityResult,
+} from "@/lib/prompts/similarityPublish";
 
 const limits = {
   ...LISTING_LIMITS,
@@ -74,6 +79,9 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [similarityResult, setSimilarityResult] = useState<PublishSimilarityResult | null>(null);
+  const [similarityChecking, setSimilarityChecking] = useState(false);
+  const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
   const [showChecklist, setShowChecklist] = useState(true);
   const [draftRestored, setDraftRestored] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -108,6 +116,12 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   });
 
   const watchAllFields = watch();
+
+  useEffect(() => {
+    setReviewAcknowledged(false);
+    setSimilarityResult(null);
+  }, [watchAllFields.title, watchAllFields.fullPrompt]);
+
 
   const isConfigured = useMemo(
     () => Boolean(address && browserStellarConfig.promptHashContractId && unlockPublicKey),
@@ -309,6 +323,29 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     }
 
     try {
+      setSimilarityChecking(true);
+      const gate = await checkPublishSimilarity({
+        title: data.title,
+        content: data.fullPrompt,
+      });
+      setSimilarityResult(gate);
+      setSimilarityChecking(false);
+
+      if (gate.decision === "block") {
+        setSubmitError(
+          "Publication blocked: this draft is too similar to an existing listing. Revise the prompt or request a maintainer override via appeal.",
+        );
+        return;
+      }
+
+      if (gate.decision === "review" && !reviewAcknowledged) {
+        setSubmitError(
+          "Elevated similarity — confirm you want to submit for maintainer review, then click Create again.",
+        );
+        setReviewAcknowledged(true);
+        return;
+      }
+
       const encrypted = await encryptPromptPlaintext(data.fullPrompt);
       const wrappedKey = await wrapPromptKey(encrypted.keyBytes, unlockPublicKey);
       const splits = (data.coCreators ?? [])
@@ -343,6 +380,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
       setSuccessMessage(`Prompt #${result.promptId.toString()} created successfully.`);
       onCreated?.();
     } catch (error) {
+      setSimilarityChecking(false);
       setSubmitError(
         error instanceof Error
           ? error.message
@@ -653,16 +691,28 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
 
         {showChecklist && <ListingQualityChecklist items={checklistItems} />}
 
+        <SimilarityPublishFeedback
+          result={similarityResult}
+          checking={similarityChecking}
+        />
+
         <Button
           type="submit"
           className="w-full bg-emerald-400 text-slate-950 hover:bg-emerald-300 mt-4"
-          disabled={isSubmitting || (showChecklist && checklistHasFailures)}
+          disabled={
+            isSubmitting ||
+            similarityChecking ||
+            (showChecklist && checklistHasFailures) ||
+            similarityResult?.decision === "block"
+          }
         >
-          {isSubmitting ? (
+          {isSubmitting || similarityChecking ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Encrypting and submitting...
+              {similarityChecking ? "Checking similarity..." : "Encrypting and submitting..."}
             </>
+          ) : similarityResult?.decision === "review" && reviewAcknowledged ? (
+            "Submit for review"
           ) : (
             "Create prompt listing"
           )}

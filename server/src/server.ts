@@ -13,6 +13,8 @@ import searchRouter from "./routes/searchRoutes";
 import { fulfillmentRouter } from "./routes/fulfillmentRoutes";
 import { reconciliationRouter } from "./routes/reconciliationRoutes";
 import { reviewRouter } from "./routes/reviewRoutes";
+import fingerprintRouter from "./routes/fingerprintRoutes";
+import appealRouter from "./routes/appealRoutes";
 import { computeReadiness } from "./services/healthService";
 import {
   globalLimiter,
@@ -80,6 +82,8 @@ app.use("/api/governance", defaultJsonLimit, authLimiter, governanceRouter); // 
 app.use("/api/search", defaultJsonLimit, searchRouter);
 app.use("/api/fulfillment", defaultJsonLimit, strictLimiter, fulfillmentRouter);
 app.use("/api/reviews", defaultJsonLimit, reviewRouter);
+app.use("/api", promptContentJsonLimit, fingerprintRouter);
+app.use("/api", defaultJsonLimit, appealRouter);
 
 app.post("/api/test-prompt", defaultJsonLimit, strictLimiter, TestPromptProxy);
 
