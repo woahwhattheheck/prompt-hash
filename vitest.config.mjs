@@ -45,6 +45,8 @@ export default defineConfig({
       "**/e2e/**",
       "**/packages/**",
       "src/test/similarityDetection.test.ts",
+      "src/test/unlockListingTerms.test.ts",
+      "src/lib/auth/listingTerms.test.ts",
       "src/test/auditTrail.test.ts",
       "src/test/fingerprint.test.ts",
       "src/test/appeal.test.ts",

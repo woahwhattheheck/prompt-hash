@@ -6,6 +6,12 @@ import {
   verifyChallengeToken,
 } from "../../src/lib/auth/challenge";
 import {
+  diffListingTerms,
+  formatTermsChangeMessage,
+  type ListingQuote,
+} from "../../src/lib/auth/listingTerms";
+import { resolveListingQuote } from "../../src/lib/auth/resolveListingQuote";
+import {
   decryptPromptCiphertext,
   hashPromptPlaintext,
   normalizeContentHash,
@@ -271,6 +277,49 @@ const redactedAddress = String(address).slice(0, 8) + "...";
       return;
     }
 
+    // 3b. Listing terms must still match the bound challenge snapshot (#239)
+    if (payload.termsHash && payload.terms) {
+      let currentQuote: ListingQuote;
+      try {
+        currentQuote = await resolveListingQuote(String(promptId));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Listing unavailable.";
+        req.logger.warn({ address: redactedAddress, promptId, error: msg }, "Listing quote unavailable during unlock");
+        res.status(409).json(
+          apiError(
+            ErrorCode.TERMS_CHANGED,
+            "Listing terms could not be verified. Refresh and try again.",
+          ),
+        );
+        return;
+      }
+
+      const changes = diffListingTerms(payload.terms, currentQuote);
+      if (changes.length > 0 || currentQuote.termsHash !== payload.termsHash) {
+        req.logger.warn(
+          { address: redactedAddress, promptId, changes },
+          "Unlock blocked: listing terms changed",
+        );
+        metrics.trackUnlockFailure(String(address), String(promptId), "terms_changed");
+        void recordAuditEvent({
+          action: "unlock_terms_changed",
+          result: "blocked",
+          promptId: String(promptId),
+          walletAddress: String(address),
+          requestId: req.requestId ?? null,
+          clientIp,
+          reason: changes.join(",") || "terms_hash_mismatch",
+        });
+        res.status(409).json(
+          apiError(ErrorCode.TERMS_CHANGED, formatTermsChangeMessage(changes), {
+            changes,
+            quote: currentQuote,
+          }),
+        );
+        return;
+      }
+    }
+
     // 4. Secondary replay protection guard
     const replayCheck = await checkReplayProtection(
       String(token),
@@ -458,6 +507,7 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     const isExpired = message.toLowerCase().includes("expired");
     const isMismatch = message.toLowerCase().includes("mismatch") || message.toLowerCase().includes("does not match");
     const isInvalidSig = message.toLowerCase().includes("invalid challenge token signature");
+    const isTerms = message.toLowerCase().includes("listing terms");
 
     void recordAuditEvent({
       action: isExpired ? "unlock_expired_challenge" : "unlock_error",
@@ -472,6 +522,10 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     if (isExpired) {
       res.status(401).json(
         apiError(ErrorCode.CHALLENGE_EXPIRED, "The challenge token has expired. Please request a new one."),
+      );
+    } else if (isTerms) {
+      res.status(409).json(
+        apiError(ErrorCode.TERMS_CHANGED, message),
       );
     } else if (isMismatch || isInvalidSig) {
       res.status(401).json(

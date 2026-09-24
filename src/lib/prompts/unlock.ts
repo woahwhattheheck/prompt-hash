@@ -1,5 +1,10 @@
 import { ERROR_MESSAGES, type ApiErrorResponse } from "@/lib/api/errorCodes";
 import { hashPromptPlaintext } from "@/lib/crypto/promptCrypto";
+import {
+  diffListingTerms,
+  ListingTermsChangedError,
+  type ListingQuote,
+} from "@/lib/auth/listingTerms";
 
 type SignMessageFn = (_message: string) => Promise<{ signedMessage?: string } | string>;
 
@@ -10,6 +15,8 @@ export interface UnlockResult {
   plaintext: string;
   decryptedContent: string;
 }
+
+export { ListingTermsChangedError };
 
 async function parseApiError(response: Response): Promise<string> {
   const payload = (await response.json().catch(() => null)) as
@@ -63,7 +70,18 @@ async function requestChallenge(address: string, promptId: string, correlationId
   });
 
   if (!response.ok) {
-    throw new Error(await parseApiError(response));
+    const body = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+    if (body?.code === "TERMS_CHANGED" && body.quote) {
+      throw new ListingTermsChangedError(
+        (body.changes as import("@/lib/auth/listingTerms").ListingTermsChange[]) ?? ["active"],
+        body.quote as ListingQuote,
+      );
+    }
+    throw new Error(
+      body?.code && ERROR_MESSAGES[body.code]
+        ? ERROR_MESSAGES[body.code]
+        : body?.error ?? "Failed to unlock prompt.",
+    );
   }
 
   return response.json() as Promise<{
@@ -71,7 +89,39 @@ async function requestChallenge(address: string, promptId: string, correlationId
     challenge: string;
     expiresAt: number;
     nonce: string;
+    quote?: ListingQuote;
   }>;
+}
+
+/**
+ * Re-fetch the public listing quote used for the pre-sign stale check (#239).
+ */
+export async function fetchListingQuote(promptId: string): Promise<ListingQuote> {
+  const response = await fetch(
+    `/api/prompts/version?promptId=${encodeURIComponent(promptId)}&quote=1`,
+  );
+  if (!response.ok) {
+    throw new Error(await parseApiError(response));
+  }
+  const body = (await response.json()) as { quote: ListingQuote };
+  if (!body?.quote?.termsHash) {
+    throw new Error("Listing quote is unavailable.");
+  }
+  return body.quote;
+}
+
+/**
+ * Compare a challenge-bound quote against the live listing.
+ * Throws ListingTermsChangedError when terms drifted — callers must not sign.
+ */
+export function assertQuoteFresh(
+  bound: ListingQuote,
+  live: ListingQuote,
+): void {
+  const changes = diffListingTerms(bound, live);
+  if (changes.length > 0 || bound.termsHash !== live.termsHash) {
+    throw new ListingTermsChangedError(changes.length ? changes : ["price"], live);
+  }
 }
 
 async function requestUnlock(
@@ -96,7 +146,17 @@ async function requestUnlock(
   });
 
   if (!response.ok) {
-    throw new Error(await parseApiError(response));
+    const body = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+    if (body?.code === "TERMS_CHANGED" && body.quote) {
+      throw new ListingTermsChangedError(
+        (body.changes as import("@/lib/auth/listingTerms").ListingTermsChange[]) ?? ["price"],
+        body.quote as ListingQuote,
+      );
+    }
+    if (body?.code && ERROR_MESSAGES[body.code]) {
+      throw new Error(ERROR_MESSAGES[body.code]);
+    }
+    throw new Error(body?.error ? String(body.error) : "Failed to unlock prompt.");
   }
 
   return response.json() as Promise<{
@@ -112,8 +172,8 @@ function normalizePromptId(promptId: string | bigint | number): string {
 }
 
 /**
- * Unlock a purchased prompt via challenge → wallet sign → unlock API.
- * Re-verifies the returned plaintext hash client-side when contentHash is present.
+ * Unlock a purchased prompt via challenge → quote refresh → wallet sign → unlock API.
+ * Blocks wallet signing when the listing is stale or the price/terms changed (#239).
  */
 export async function unlockPromptContent(
   address: string,
@@ -129,6 +189,13 @@ export async function unlockPromptContent(
   console.log(`[Unlock Flow] Started for Prompt ID ${id} with Correlation ID: ${correlationId}`);
 
   const challenge = await requestChallenge(address, id, correlationId);
+
+  // Pre-sign gate: never ask the wallet to sign a stale quote.
+  if (challenge.quote) {
+    const liveQuote = await fetchListingQuote(id);
+    assertQuoteFresh(challenge.quote, liveQuote);
+  }
+
   const signature = await signMessage(challenge.challenge);
 
   if (!signature) {

@@ -23,6 +23,7 @@ import { copyToClipboard } from "@/lib/clipboard/secureClipboard";
 import { usePageMeta } from "@/lib/seo/usePageMeta";
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { UserAvatar } from "@/components/UserAvatar";
+import { fetchListingQuote } from "@/lib/prompts/unlock";
 
 const FALLBACK_IMAGE = "/images/codeguru.png";
 
@@ -44,6 +45,13 @@ export default function PromptDetailPage() {
     queryKey: ["prompt-detail", id],
     queryFn: () => getPrompt(browserStellarConfig, BigInt(id)),
     enabled: isValidId,
+  });
+
+  const { data: listingQuote } = useQuery({
+    queryKey: ["prompt-listing-quote", id],
+    queryFn: () => fetchListingQuote(id),
+    enabled: isValidId,
+    retry: false,
   });
 
   // Drive the share preview (Open Graph / Twitter card) from the prompt details
@@ -223,7 +231,26 @@ export default function PromptDetailPage() {
                     v{String((prompt as any).revision)}
                   </span>
                 )}
+                {listingQuote && (
+                  <span
+                    className="inline-flex items-center gap-1.5 text-cyan-200/90"
+                    title="Live listing quote used for unlock challenge binding"
+                    data-testid="live-listing-quote"
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    Live quote v{listingQuote.versionIndex}
+                    {!listingQuote.active ? " · inactive" : ""}
+                  </span>
+                )}
               </div>
+
+              {listingQuote && (
+                <p className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-400">
+                  Unlock challenges bind this live quote (price, asset, seller, version).
+                  If the creator changes terms before you sign, signing is blocked and
+                  you will be asked to confirm the refreshed quote.
+                </p>
+              )}
 
               <div className="flex flex-col gap-3 border-t border-white/10 pt-5 sm:flex-row">
                 <Button

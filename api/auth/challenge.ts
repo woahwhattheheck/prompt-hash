@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createChallengeToken } from "../../src/lib/auth/challenge";
+import { resolveListingQuote } from "../../src/lib/auth/resolveListingQuote";
+import type { ListingQuote } from "../../src/lib/auth/listingTerms";
 import { withObservability } from "../../src/lib/observability/wrapper";
 import { checkRateLimit } from "../../src/lib/observability/rateLimiter";
 import { metrics } from "../../src/lib/observability/metrics";
@@ -28,6 +30,8 @@ export interface ChallengeResponse {
   issuedAt: number;
   expiresAt: number;
   nonce: string;
+  /** Immutable listing quote bound into the challenge (#239). */
+  quote: ListingQuote;
 }
 
 // Fail-fast module-load validation: reject startup if secrets are missing.
@@ -124,16 +128,49 @@ async function handler(
     return;
   }
 
+  let quote: ListingQuote;
+  try {
+    quote = await resolveListingQuote(String(promptId));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Listing unavailable.";
+    req.logger.warn({ promptId: String(promptId), error: message }, "Failed to resolve listing quote for challenge");
+    void recordAuditEvent({
+      action: "challenge_listing_unavailable",
+      result: "failure",
+      promptId: String(promptId),
+      walletAddress: String(address),
+      requestId: req.requestId ?? null,
+      clientIp,
+      reason: "listing_unavailable",
+    });
+    res.status(404).json(
+      apiError(
+        ErrorCode.MISSING_FIELDS,
+        "Prompt listing is unavailable. Refresh the page and try again.",
+      ),
+    );
+    return;
+  }
+
+  if (!quote.active) {
+    res.status(409).json(
+      apiError(
+        ErrorCode.TERMS_CHANGED,
+        "This listing is no longer available for unlock. Refresh to see current status.",
+        { quote, changes: ["active"] },
+      ),
+    );
+    return;
+  }
+
   const MAX_TTL_MS = 10 * 60 * 1000;
   const ttlMs = Math.min(5 * 60 * 1000, MAX_TTL_MS);
 
-  const challenge = createChallengeToken(
-    secret,
-    String(address),
-    String(promptId),
-    Date.now(),
+  const challenge = createChallengeToken(secret, String(address), String(promptId), {
+    now: Date.now(),
     ttlMs,
-  );
+    terms: quote,
+  });
 
   const response: ChallengeResponse = {
     token: challenge.token,
@@ -141,6 +178,7 @@ async function handler(
     issuedAt: challenge.issuedAt,
     expiresAt: challenge.expiresAt,
     nonce: challenge.nonce,
+    quote,
   };
 
   metrics.trackChallengeIssued(String(address), String(promptId));
@@ -148,7 +186,7 @@ async function handler(
   const redactedAddress = String(address).slice(0, 8) + "...";
 
   req.logger.info(
-    { address: redactedAddress, promptId: String(promptId) },
+    { address: redactedAddress, promptId: String(promptId), termsHash: quote.termsHash },
     "Challenge token issued successfully",
   );
 

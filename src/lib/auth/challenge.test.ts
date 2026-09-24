@@ -10,6 +10,7 @@ import {
   verifyChallengeToken,
   NonceLedger,
 } from "./challenge";
+import { toListingQuote } from "./listingTerms";
 
 const SECRET = "unit-test-secret";
 const ISSUED_AT = 1_700_000_000_000;
@@ -257,5 +258,35 @@ describe("unlock challenge security edge cases", () => {
 
     // Second use of the same token must be rejected
     expect(ledger.consume(challenge.nonce, challenge.expiresAt)).toBe(true);
+  });
+});
+
+describe("listing terms binding (#239)", () => {
+  it("embeds termsHash in the challenge message and payload", () => {
+    const address = Keypair.random().publicKey();
+    const terms = {
+      promptId: "42",
+      versionIndex: 2,
+      priceStroops: "50000000",
+      asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      seller: address,
+      active: true,
+    };
+    const challenge = createChallengeToken(SECRET, address, "42", {
+      now: ISSUED_AT,
+      terms,
+    });
+    expect(challenge.challenge).toContain("terms:");
+    expect(challenge.quote?.termsHash).toBe(toListingQuote(terms).termsHash);
+
+    const payload = verifyChallengeToken(
+      SECRET,
+      challenge.token,
+      address,
+      "42",
+      WITHIN_TTL,
+    );
+    expect(payload.termsHash).toBe(challenge.quote?.termsHash);
+    expect(payload.terms?.priceStroops).toBe("50000000");
   });
 });

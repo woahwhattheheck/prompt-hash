@@ -28,6 +28,12 @@ export const ErrorCode = {
   /** The wallet has not purchased access to this prompt. */
   ACCESS_NOT_PURCHASED: "ACCESS_NOT_PURCHASED",
 
+  /**
+   * Listing terms (price, asset, seller, version, or availability) changed
+   * after the challenge was issued. Client must refresh and re-confirm.
+   */
+  TERMS_CHANGED: "TERMS_CHANGED",
+
   // ── Rate limiting (429) ───────────────────────────────────────────────────
 
   /** Too many requests from this IP address. */
@@ -65,6 +71,18 @@ export interface ApiErrorResponse {
   reset?: number;
   /** Safe correlation support reference ID. */
   requestId?: string;
+  /** Which listing fields changed when code is TERMS_CHANGED (#239). */
+  changes?: string[];
+  /** Refreshed listing quote when code is TERMS_CHANGED (#239). */
+  quote?: {
+    promptId: string;
+    versionIndex: number;
+    priceStroops: string;
+    asset: string;
+    seller: string;
+    active: boolean;
+    termsHash: string;
+  };
 }
 
 /**
@@ -89,6 +107,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   CHALLENGE_INVALID: "The unlock session is no longer valid. Click Decrypt Content to start over.",
   INVALID_SIGNATURE: "Wallet signature did not match. Open your wallet and try signing again.",
   ACCESS_NOT_PURCHASED: "You have not purchased access to this prompt. Complete a purchase first.",
+  TERMS_CHANGED: "Listing terms changed since you started. Review the updated price and details before signing.",
   RATE_LIMIT_IP: "Too many requests. Please wait a moment, then try again.",
   RATE_LIMIT_WALLET: "Too many unlock attempts for this wallet. Please wait a minute and try again.",
   CONFIGURATION_ERROR: "Something went wrong on our end. Please try again later.",
@@ -109,6 +128,9 @@ export function classifyUnlockError(message: string): UnlockErrorCategory {
     "not purchased",
     "access to this prompt",
     "purchase access",
+    "listing terms changed",
+    "updated terms",
+    "no longer available",
   ];
   if (accessPhrases.some((p) => lower.includes(p))) return "access";
 

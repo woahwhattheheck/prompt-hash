@@ -5,9 +5,29 @@ import PromptVersion from "../../server/src/models/PromptVersion";
 import Purchase from "../../server/src/models/Purchase";
 import User from "../../server/src/models/User";
 import { publishPromptVersion } from "../../server/src/services/promptVersioning";
+import { resolveListingQuote } from "../../src/lib/auth/resolveListingQuote";
+import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 
 async function handler(req: any, res: any) {
   await connectDb();
+
+  // GET /api/prompts/version?promptId=&quote=1
+  // Public listing quote for pre-sign stale/price checks (#239).
+  if (req.method === "GET" && (req.query?.quote === "1" || req.query?.quote === "true")) {
+    const { promptId } = req.query ?? {};
+    if (!promptId) {
+      res.status(400).json(apiError(ErrorCode.MISSING_FIELDS, "promptId is required."));
+      return;
+    }
+    try {
+      const quote = await resolveListingQuote(String(promptId));
+      res.status(200).json({ quote });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Listing unavailable.";
+      res.status(404).json(apiError(ErrorCode.MISSING_FIELDS, message));
+    }
+    return;
+  }
 
   // GET /api/prompts/version?promptId=&buyerWallet=
   // Returns the versioned content a buyer is entitled to.

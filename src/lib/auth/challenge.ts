@@ -1,6 +1,12 @@
 import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import { Buffer } from "buffer";
 import { Keypair } from "@stellar/stellar-sdk";
+import {
+  hashListingTerms,
+  type ListingQuote,
+  type ListingTerms,
+  toListingQuote,
+} from "./listingTerms";
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 
@@ -12,7 +18,17 @@ export interface ChallengePayload {
   expiresAt: number;
   action?: string;
   aud?: string;
+  /** SHA-256 of canonical listing terms bound at issuance (#239). */
+  termsHash?: string;
+  /** Immutable quote snapshot bound at issuance (#239). */
+  terms?: ListingTerms;
 }
+
+export type CreateChallengeOptions = {
+  now?: number;
+  ttlMs?: number;
+  terms?: ListingTerms;
+};
 
 function base64UrlEncode(value: string) {
   return Buffer.from(value, "utf8")
@@ -33,16 +49,30 @@ function signPayload(secret: string, body: string) {
 }
 
 export function buildChallengeMessage(payload: ChallengePayload) {
-  return `prompt-hash unlock:${payload.address}:${payload.promptId}:${payload.nonce}:${payload.issuedAt}:${payload.expiresAt}`;
+  const base = `prompt-hash unlock:${payload.address}:${payload.promptId}:${payload.nonce}:${payload.issuedAt}:${payload.expiresAt}`;
+  if (payload.termsHash) {
+    return `${base}:terms:${payload.termsHash}`;
+  }
+  return base;
 }
 
 export function createChallengeToken(
   secret: string,
   address: string,
   promptId: string,
-  now = Date.now(),
-  ttlMs = DEFAULT_TTL_MS,
+  nowOrOptions: number | CreateChallengeOptions = Date.now(),
+  ttlMsArg = DEFAULT_TTL_MS,
 ) {
+  const options: CreateChallengeOptions =
+    typeof nowOrOptions === "number"
+      ? { now: nowOrOptions, ttlMs: ttlMsArg }
+      : nowOrOptions;
+
+  const now = options.now ?? Date.now();
+  const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+  const terms = options.terms;
+  const termsHash = terms ? hashListingTerms(terms) : undefined;
+
   const payload: ChallengePayload = {
     address,
     promptId,
@@ -51,10 +81,24 @@ export function createChallengeToken(
     expiresAt: now + ttlMs,
     action: "unlock",
     aud: "prompt-hash",
+    ...(terms && termsHash
+      ? {
+          terms: {
+            promptId: String(terms.promptId),
+            versionIndex: Number(terms.versionIndex),
+            priceStroops: String(terms.priceStroops),
+            asset: String(terms.asset),
+            seller: String(terms.seller),
+            active: Boolean(terms.active),
+          },
+          termsHash,
+        }
+      : {}),
   };
 
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = signPayload(secret, encodedPayload);
+  const quote: ListingQuote | undefined = terms ? toListingQuote(terms) : undefined;
 
   return {
     token: `${encodedPayload}.${signature}`,
@@ -62,6 +106,8 @@ export function createChallengeToken(
     issuedAt: payload.issuedAt,
     expiresAt: payload.expiresAt,
     nonce: payload.nonce,
+    termsHash,
+    quote,
   };
 }
 
@@ -138,6 +184,16 @@ export function verifyChallengeToken(
   // Future timestamp clock skew protection
   if (payload.issuedAt > now + 5 * 60 * 1000) {
     throw new Error("Challenge token issued in the future.");
+  }
+
+  if (payload.termsHash && payload.terms) {
+    const recomputed = hashListingTerms(payload.terms);
+    if (recomputed !== payload.termsHash) {
+      throw new Error("Challenge token listing terms mismatch (does not match).");
+    }
+    if (String(payload.terms.promptId) !== String(promptId)) {
+      throw new Error("Challenge token listing prompt mismatch (does not match).");
+    }
   }
 
   return payload;

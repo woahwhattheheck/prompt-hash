@@ -238,6 +238,10 @@ Expired challenge tokens surface as `400` with an `expired` message. The fronten
 
 ---
 
+## Unlock listing terms (#239)
+
+Before the buyer signs an unlock challenge, the client refreshes the public listing quote. If price, asset, seller, version, or availability changed since challenge issuance, wallet signing is blocked and the buyer must confirm the refreshed terms. See `docs/unlock-listing-terms.md`.
+
 ## Related Files and Issues
 
 | File | Purpose |

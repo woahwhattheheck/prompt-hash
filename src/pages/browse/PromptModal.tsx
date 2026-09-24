@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { WalletContext } from "../../providers/WalletProvider";
 import { useAsyncTransaction } from "../../components/useAsyncTransaction";
 import { PromptHashClient } from "../../lib/stellar/promptHashClient";
-import { unlockPrompt } from "../../lib/prompts/unlock";
+import { unlockPrompt, ListingTermsChangedError } from "../../lib/prompts/unlock";
+import { StaleListingBanner } from "../../components/prompts/StaleListingBanner";
+import type { ListingQuote, ListingTermsChange } from "../../lib/auth/listingTerms";
 import { Skeleton } from "../../components/Skeleton";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UnlockExplainer } from "../../components/UnlockExplainer";
@@ -259,6 +261,10 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   const [isCheckingAccess, setIsCheckingAccess] = useState(false);
   const [showReviewForm, setShowReviewForm] = useState(false);
   const [showReportDialog, setShowReportDialog] = useState(false);
+  const [staleListing, setStaleListing] = useState<{
+    quote: ListingQuote;
+    changes: ListingTermsChange[];
+  } | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<{
     visible: boolean;
     success: boolean;
@@ -351,12 +357,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
       return await unlockPrompt(itemId, hash, wallet.signMessage, wallet.address);
     },
     {
-      onOptimistic: () => setStatus("UNLOCKING"),
+      onOptimistic: () => {
+        setStaleListing(null);
+        setStatus("UNLOCKING");
+      },
       onSuccess: (data) => {
+        setStaleListing(null);
         setSecretContent(data.decryptedContent);
         setStatus("SUCCESS");
       },
-      onError: () => setStatus("PURCHASED_LOCKED"),
+      onError: (error) => {
+        if (error instanceof ListingTermsChangedError) {
+          setStaleListing({ quote: error.quote, changes: error.changes });
+        }
+        setStatus("PURCHASED_LOCKED");
+      },
     },
   );
 
@@ -555,17 +570,29 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                     </p>
                   </div>
 
+                  {staleListing && (
+                    <StaleListingBanner
+                      quote={staleListing.quote}
+                      changes={staleListing.changes}
+                      onConfirmRefresh={() => {
+                        setStaleListing(null);
+                        runUnlock(txHash || "existing").catch(() => {});
+                      }}
+                      onDismiss={() => setStaleListing(null)}
+                    />
+                  )}
+
                   {/* Explain what the signature does — always visible before and during signing */}
                   <UnlockExplainer
                     state="signing"
                     onRetry={
-                      unlockError
+                      unlockError && !staleListing
                         ? () => runUnlock(txHash || "existing")
                         : undefined
                     }
                   />
 
-                  {unlockError && (() => {
+                  {unlockError && !staleListing && (() => {
                     const mapped: MappedWalletError = mapWalletError(unlockError);
                     return (
                       <div className="space-y-3">
@@ -583,11 +610,14 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   })()}
 
                   <button
-                    onClick={() => runUnlock(txHash || "existing").catch(() => {})}
-                    disabled={isUnlocking}
-                    className="w-full h-14 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-2xl transition-all shadow-[0_0_20px_-5px_rgba(16,185,129,0.4)]"
+                    onClick={() => {
+                      setStaleListing(null);
+                      runUnlock(txHash || "existing").catch(() => {});
+                    }}
+                    disabled={isUnlocking || Boolean(staleListing)}
+                    className="w-full h-14 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-2xl transition-all shadow-[0_0_20px_-5px_rgba(16,185,129,0.4)] disabled:opacity-50"
                   >
-                    {isUnlocking ? "Unlocking..." : "Decrypt Content"}
+                    {isUnlocking ? "Unlocking..." : staleListing ? "Confirm updated terms above" : "Decrypt Content"}
                   </button>
                 </div>
               )}
