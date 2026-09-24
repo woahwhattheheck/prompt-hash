@@ -19,7 +19,8 @@
     "reindex": "ts-node scripts/reIndexFromLedger.ts",
     "reindex:dry-run": "ts-node scripts/reIndexFromLedger.ts --dry-run",
     "dedupe-purchases": "ts-node scripts/dedupePurchases.ts",
-    "dedupe-purchases:dry-run": "ts-node scripts/dedupePurchases.ts --dry-run"
+    "dedupe-purchases:dry-run": "ts-node scripts/dedupePurchases.ts --dry-run",
+    "test:report-auth": "jest --testPathPatterns='adminPrincipal|reportAccess' --passWithNoTests"
   },
   "files": [
     "build"

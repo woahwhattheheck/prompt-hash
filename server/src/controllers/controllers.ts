@@ -7,6 +7,7 @@ import { stellarConfig } from "../config/stellar";
 import User from "../models/User";
 import Prompt from "../models/Prompt";
 import Report from "../models/Report";
+import { listPromptReportsForReview } from "../services/reportAccess";
 import { streamText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import {
@@ -480,35 +481,33 @@ export const GetPromptReports = async (
   req: Request,
   res: Response,
 ): Promise<Response<any>> => {
-  try {
-    await connectDb();
+  // Issue #146: verify shared admin principal + report-review role before
+  // exposing abuse reports. Actor identity comes from verified credentials;
+  // responses use an allowlisted DTO and access is audited.
+  const promptId =
+    typeof req.query.promptId === "string"
+      ? req.query.promptId
+      : Array.isArray(req.query.promptId)
+        ? String(req.query.promptId[0] ?? "")
+        : null;
+  const status =
+    typeof req.query.status === "string"
+      ? req.query.status
+      : Array.isArray(req.query.status)
+        ? String(req.query.status[0] ?? "")
+        : null;
 
-    // Check admin authentication (placeholder)
-    const adminToken = req.headers.authorization?.split(" ")[1];
-    if (!adminToken) {
-      return res.status(401).json({
-        error: "Unauthorized: Admin token required",
-      });
-    }
+  const result = await listPromptReportsForReview({
+    authorizationHeader: req.headers.authorization,
+    promptId,
+    status,
+    requestId:
+      typeof req.headers["x-request-id"] === "string"
+        ? req.headers["x-request-id"]
+        : undefined,
+  });
 
-    const { searchParams } = new URL(req.url);
-    const promptId = searchParams.get("promptId");
-
-    const query: any = {};
-    if (promptId) {
-      query.promptId = promptId;
-    }
-
-    const reports = await Report.find(query)
-      .sort({ createdAt: -1 });
-
-    return res.json(reports);
-  } catch (err) {
-    console.error("Get reports error:", err);
-    return res.status(500).json({
-      error: (err as Error).message || "Failed to fetch reports",
-    });
-  }
+  return res.status(result.status).json(result.body);
 };
 
 // ─── Issue #257: Prompt Preview Analytics ─────────────────────────────────────

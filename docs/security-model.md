@@ -176,3 +176,9 @@ staging, production):
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API | `https://app.example.com,https://staging.example.com` |
 | `TRUSTED_PROXY_HOPS` | Number of trusted reverse-proxy hops in front of the server | `1` |
+
+## Abuse report listing (#146)
+
+`GET /api/prompts/reports` requires a verified admin principal with the
+`report_reviewer` or `admin` role. See [report-review-access.md](./report-review-access.md)
+for credential format, DTO allowlist, and access audit policy.
