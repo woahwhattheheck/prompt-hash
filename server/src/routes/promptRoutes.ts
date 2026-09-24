@@ -6,6 +6,7 @@ import {
   GetDraftPrompts,
   SubmitPromptReport,
   GetPromptReports,
+  UpdatePromptReportStatus,
   RecordPreview,
   GetPreviewStats,
   GetPreviewToken,
@@ -47,3 +48,5 @@ promptRouter.get("/preview/stats", GetPreviewStats);
 // Report endpoints — off-chain moderation data, does not affect access control
 promptRouter.post("/reports", SubmitPromptReport);
 promptRouter.get("/reports", GetPromptReports);
+promptRouter.patch("/reports/:id", UpdatePromptReportStatus);
+promptRouter.post("/reports/:id/status", UpdatePromptReportStatus);

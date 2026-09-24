@@ -5,9 +5,18 @@ import {
   Loader2,
   CheckCircle,
   ChevronRight,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ReportClient, REPORT_REASONS, type ReportReason } from "@/lib/reports/reportClient";
+import {
+  ReportClient,
+  REPORT_REASONS,
+  EVIDENCE_KIND_LABELS,
+  EVIDENCE_KINDS,
+  type ReportReason,
+  type EvidenceRef,
+} from "@/lib/reports/reportClient";
 
 export interface ReportDialogProps {
   promptId: string;
@@ -18,6 +27,12 @@ export interface ReportDialogProps {
 
 type DialogStage = "form" | "submitting" | "success";
 
+const emptyEvidence = (): EvidenceRef => ({
+  kind: "content_hash",
+  ref: "",
+  note: "",
+});
+
 export function ReportDialog({
   promptId,
   isOpen,
@@ -26,11 +41,22 @@ export function ReportDialog({
 }: ReportDialogProps) {
   const [stage, setStage] = useState<DialogStage>("form");
   const [selectedReason, setSelectedReason] = useState<ReportReason | "">(
-    ""
+    "",
   );
   const [description, setDescription] = useState("");
+  const [evidenceItems, setEvidenceItems] = useState<EvidenceRef[]>([]);
+  const [reporterPrivate, setReporterPrivate] = useState(true);
   const [error, setError] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const resetForm = () => {
+    setStage("form");
+    setSelectedReason("");
+    setDescription("");
+    setEvidenceItems([]);
+    setReporterPrivate(true);
+    setError("");
+  };
 
   const handleSubmit = async () => {
     setError("");
@@ -49,25 +75,31 @@ export function ReportDialog({
     setStage("submitting");
 
     try {
+      const evidence = evidenceItems
+        .map((item) => ({
+          kind: item.kind,
+          ref: item.ref.trim(),
+          note: item.note?.trim() || undefined,
+        }))
+        .filter((item) => item.ref.length > 0);
+
       await ReportClient.submitReport(
         promptId,
         userAddress,
         selectedReason as ReportReason,
-        description
+        description,
+        evidence,
+        reporterPrivate,
       );
 
       setStage("success");
       setTimeout(() => {
         onClose();
-        // Reset form
-        setStage("form");
-        setSelectedReason("");
-        setDescription("");
-        setError("");
+        resetForm();
       }, 2000);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to submit report"
+        err instanceof Error ? err.message : "Failed to submit report",
       );
       setStage("form");
     } finally {
@@ -79,8 +111,7 @@ export function ReportDialog({
 
   return (
     <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md">
-      <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
-        {/* Close button */}
+      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-2 rounded-full text-slate-400 hover:text-white transition-colors"
@@ -90,7 +121,6 @@ export function ReportDialog({
         </button>
 
         <div className="p-6 sm:p-8">
-          {/* FORM STAGE */}
           {stage === "form" && (
             <div className="space-y-6">
               <div>
@@ -99,11 +129,12 @@ export function ReportDialog({
                   <h2 className="text-xl font-bold text-white">Report Prompt</h2>
                 </div>
                 <p className="text-sm text-slate-400">
-                  Help us maintain quality by reporting issues with this prompt
+                  Report stolen, harmful, broken, or malicious prompts. Attach
+                  evidence references only — never paste private keys, emails,
+                  or full prompt bodies.
                 </p>
               </div>
 
-              {/* Reason Selector */}
               <div className="space-y-3">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                   What's the issue?
@@ -112,6 +143,7 @@ export function ReportDialog({
                   {Object.entries(REPORT_REASONS).map(([key, label]) => (
                     <button
                       key={key}
+                      type="button"
                       onClick={() => setSelectedReason(key as ReportReason)}
                       className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left ${
                         selectedReason === key
@@ -137,9 +169,11 @@ export function ReportDialog({
                 </div>
               </div>
 
-              {/* Description */}
               <div className="space-y-2">
-                <label htmlFor="report-description" className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label
+                  htmlFor="report-description"
+                  className="text-xs font-semibold uppercase tracking-wider text-slate-400"
+                >
                   Additional details (optional)
                 </label>
                 <textarea
@@ -155,14 +189,118 @@ export function ReportDialog({
                 </p>
               </div>
 
-              {/* Error */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Evidence references (optional)
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={evidenceItems.length >= 5}
+                    onClick={() =>
+                      setEvidenceItems((prev) => [...prev, emptyEvidence()])
+                    }
+                    className="h-7 text-xs"
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Add
+                  </Button>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Allowed: content/screenshot hashes, IPFS CIDs, https URLs, tx
+                  hashes. Max 5 items.
+                </p>
+                {evidenceItems.map((item, index) => (
+                  <div
+                    key={index}
+                    className="space-y-2 p-3 rounded-lg border border-white/10 bg-white/5"
+                  >
+                    <div className="flex gap-2">
+                      <select
+                        value={item.kind}
+                        onChange={(e) => {
+                          const kind = e.target
+                            .value as EvidenceRef["kind"];
+                          setEvidenceItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index ? { ...row, kind } : row,
+                            ),
+                          );
+                        }}
+                        className="flex-1 px-2 py-1.5 rounded border border-white/10 bg-slate-950 text-sm text-white"
+                      >
+                        {EVIDENCE_KINDS.map((kind) => (
+                          <option key={kind} value={kind}>
+                            {EVIDENCE_KIND_LABELS[kind]}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        aria-label="Remove evidence"
+                        onClick={() =>
+                          setEvidenceItems((prev) =>
+                            prev.filter((_, i) => i !== index),
+                          )
+                        }
+                        className="p-2 text-slate-400 hover:text-red-400"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <input
+                      value={item.ref}
+                      onChange={(e) =>
+                        setEvidenceItems((prev) =>
+                          prev.map((row, i) =>
+                            i === index
+                              ? { ...row, ref: e.target.value }
+                              : row,
+                          ),
+                        )
+                      }
+                      placeholder="Hash, CID, https URL, or tx hash"
+                      className="w-full px-3 py-2 rounded border border-white/10 bg-slate-950 text-sm text-white placeholder:text-slate-500"
+                    />
+                    <input
+                      value={item.note || ""}
+                      onChange={(e) =>
+                        setEvidenceItems((prev) =>
+                          prev.map((row, i) =>
+                            i === index
+                              ? { ...row, note: e.target.value }
+                              : row,
+                          ),
+                        )
+                      }
+                      placeholder="Short note (optional, max 200)"
+                      maxLength={200}
+                      className="w-full px-3 py-2 rounded border border-white/10 bg-slate-950 text-sm text-white placeholder:text-slate-500"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <label className="flex items-start gap-3 text-sm text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={reporterPrivate}
+                  onChange={(e) => setReporterPrivate(e.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  Keep my wallet pseudonymous outside admin triage (recommended)
+                </span>
+              </label>
+
               {error && (
                 <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
                   {error}
                 </div>
               )}
 
-              {/* Actions */}
               <div className="flex gap-3">
                 <Button
                   variant="outline"
@@ -182,7 +320,6 @@ export function ReportDialog({
             </div>
           )}
 
-          {/* SUBMITTING STAGE */}
           {stage === "submitting" && (
             <div className="flex flex-col items-center justify-center py-12 space-y-4 text-center">
               <div className="relative">
@@ -196,7 +333,6 @@ export function ReportDialog({
             </div>
           )}
 
-          {/* SUCCESS STAGE */}
           {stage === "success" && (
             <div className="flex flex-col items-center justify-center py-12 space-y-4 text-center animate-in fade-in zoom-in">
               <div className="p-3 rounded-full bg-emerald-500/10 border border-emerald-500/20">

@@ -11,6 +11,7 @@ import {
   ShoppingBag,
   Sparkles,
   User,
+  Flag,
 } from "lucide-react";
 import { Navigation } from "@/components/navigation";
 import { Footer } from "@/components/footer";
@@ -23,6 +24,8 @@ import { copyToClipboard } from "@/lib/clipboard/secureClipboard";
 import { usePageMeta } from "@/lib/seo/usePageMeta";
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { UserAvatar } from "@/components/UserAvatar";
+import { ReportDialog } from "@/components/prompts/ReportDialog";
+import { useWallet } from "@/hooks/useWallet";
 
 const FALLBACK_IMAGE = "/images/codeguru.png";
 
@@ -35,6 +38,8 @@ export default function PromptDetailPage() {
   const { id = "" } = useParams();
   const isValidId = /^\d+$/.test(id);
   const [copied, setCopied] = useState(false);
+  const [showReportDialog, setShowReportDialog] = useState(false);
+  const { address: walletAddress } = useWallet();
 
   const {
     data: prompt,
@@ -237,6 +242,14 @@ export default function PromptDetailPage() {
                 </Button>
                 <Button
                   variant="ghost"
+                  onClick={() => setShowReportDialog(true)}
+                  className="h-10 flex-1 border border-amber-500/20 text-amber-200 hover:bg-amber-500/10"
+                >
+                  <Flag className="h-4 w-4" />
+                  Report prompt
+                </Button>
+                <Button
+                  variant="ghost"
                   onClick={handleCopyLink}
                   className="h-10 flex-1 border border-white/10 text-slate-200 hover:bg-white/10"
                 >
@@ -257,6 +270,13 @@ export default function PromptDetailPage() {
           </article>
         )}
       </main>
+
+      <ReportDialog
+        promptId={id}
+        isOpen={showReportDialog}
+        onClose={() => setShowReportDialog(false)}
+        userAddress={walletAddress}
+      />
 
       <Footer />
     </div>

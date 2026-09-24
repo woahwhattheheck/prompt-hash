@@ -176,3 +176,62 @@ staging, production):
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API | `https://app.example.com,https://staging.example.com` |
 | `TRUSTED_PROXY_HOPS` | Number of trusted reverse-proxy hops in front of the server | `1` |
+
+---
+
+## Prompt Marketplace Abuse Reports (#241)
+
+Users can report stolen, harmful, broken, or malicious marketplace prompts.
+Reporting is off-chain moderation data and does **not** change on-chain access
+control.
+
+### Evidence capture (references only)
+
+| Kind | Accepted `ref` shape |
+| --- | --- |
+| `content_hash` / `screenshot_hash` | Hex digest, 32–128 chars |
+| `ipfs_cid` | CIDv0 (`Qm…`) or CIDv1 (`bafy…` / `bafk…`) |
+| `url_ref` | Absolute `https://` URL, no credentials |
+| `tx_hash` | 64-char hex digest |
+
+Rules enforced in `src/lib/reports/abuseEvidence.ts` and
+`server/src/services/abuseReports.ts`:
+
+- Max **5** evidence items; `ref` ≤ 512 chars; optional `note` ≤ 200 chars
+- Reject `data:` / `javascript:` schemes, credentialed URLs, emails, private-key
+  material, raw base64 blobs, and free-text dumps
+- Server logs only `{ reportId, promptId, reason, evidenceCount, redacted reporter }`
+  — never description or evidence notes
+
+### Reporter privacy
+
+- `reporterPrivate` defaults to `true`
+- Wallet is stored for duplicate detection and admin triage
+- Non-admin / log surfaces redact to a short prefix (`ABCD…WXYZ`)
+
+### Moderation status machine
+
+```
+pending ──────────► investigating ──────────► resolved
+   │                      │                      │
+   ├──────────────────────┼──────────────────────┘
+   │                      │
+   └──────────────────────┴──────────────────► dismissed
+
+Terminal → investigating is the only reopen path.
+```
+
+Each transition appends `{ from, to, actor, notes?, at }` to `statusHistory`.
+Duplicate open reports (`pending` / `investigating`) for the same
+`(promptId, reporterAddress, reason)` are rejected with `409`.
+
+### API
+
+| Method | Path | Who |
+| --- | --- | --- |
+| `POST` | `/api/prompts/reports` | Authenticated wallet user |
+| `GET` | `/api/prompts/reports` | Maintainer / admin |
+| `PATCH` / `POST` | `/api/prompts/reports/:id` / `.../status` | Maintainer / admin |
+
+UI entry points: `ReportDialog` on prompt pages; maintainer queue at
+`src/pages/admin/Reports.tsx`.

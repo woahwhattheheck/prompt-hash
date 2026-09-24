@@ -7,6 +7,16 @@ import { stellarConfig } from "../config/stellar";
 import User from "../models/User";
 import Prompt from "../models/Prompt";
 import Report from "../models/Report";
+import {
+  normalizeEvidence,
+  EvidenceValidationError,
+  buildStatusTransition,
+  StatusTransitionError,
+  isTerminalStatus,
+  isOpenReportStatus,
+  redactReporterAddress,
+  type ReportStatus,
+} from "../services/abuseReports";
 import { streamText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import {
@@ -419,7 +429,59 @@ export const TestPromptProxy = async (
 };
 
 
-/* REPORT CONTROLLERS */
+/* REPORT CONTROLLERS — abuse reports with evidence + moderation (#241) */
+
+const VALID_REPORT_REASONS = [
+  "quality-issue",
+  "misleading-content",
+  "plagiarism",
+  "harmful-content",
+  "copyright",
+  "other",
+] as const;
+
+function isAuthorizedReportModerator(
+  req: Request,
+  adminAddress?: string,
+  adminSecretKey?: string,
+): boolean {
+  const adminApiKey = process.env.ADMIN_API_KEY ?? "admin-secret-key";
+  const configuredAdmin =
+    process.env.ADMIN_WALLET_ADDRESS ??
+    process.env.PUBLIC_STELLAR_SIMULATION_ACCOUNT ??
+    "";
+  const authHeader = req.headers?.authorization;
+
+  if (adminSecretKey && adminSecretKey === adminApiKey) {
+    return true;
+  }
+  if (authHeader && authHeader === `Bearer ${adminApiKey}`) {
+    return true;
+  }
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length)
+    : undefined;
+  if (token && token === adminApiKey) {
+    return true;
+  }
+  if (
+    configuredAdmin &&
+    adminAddress &&
+    adminAddress.toLowerCase() === configuredAdmin.toLowerCase()
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function serializeReportForAdmin(report: any) {
+  const obj = typeof report.toObject === "function" ? report.toObject() : report;
+  return {
+    ...obj,
+    id: String(obj._id ?? obj.id ?? ""),
+  };
+}
+
 
 export const SubmitPromptReport = async (
   req: Request,
@@ -428,45 +490,112 @@ export const SubmitPromptReport = async (
   try {
     await connectDb();
 
-    const { promptId, reporterAddress, reason, description } = req.body;
+    const {
+      promptId,
+      reporterAddress,
+      reason,
+      description,
+      evidence,
+      reporterPrivate,
+    } = req.body ?? {};
 
-    // Validate required fields
     if (!promptId || !reporterAddress || !reason) {
       return res.status(400).json({
         error: "Missing required fields: promptId, reporterAddress, reason",
       });
     }
 
-    // Validate reason
-    const validReasons = ["quality-issue", "misleading-content", "plagiarism", "harmful-content", "copyright", "other"];
-    if (!validReasons.includes(reason)) {
+    if (!(VALID_REPORT_REASONS as readonly string[]).includes(reason)) {
       return res.status(400).json({
         error: "Invalid reason provided",
       });
     }
 
-    // Check if prompt exists
-    const prompt = await Prompt.findById(promptId);
+    let normalizedEvidence;
+    try {
+      normalizedEvidence = normalizeEvidence(evidence);
+    } catch (err) {
+      if (err instanceof EvidenceValidationError) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+
+    // Resolve by Mongo ObjectId or on-chain listing id (UI uses on-chain ids).
+    const promptIdStr = String(promptId);
+    let prompt = null;
+    if (mongoose.isValidObjectId(promptIdStr)) {
+      prompt = await Prompt.findById(promptIdStr);
+    }
+    if (!prompt) {
+      prompt = await Prompt.findOne({
+        $or: [
+          { onChainId: promptIdStr },
+          { onChainReference: promptIdStr },
+        ],
+      });
+    }
     if (!prompt) {
       return res.status(404).json({
         error: "Prompt not found",
       });
     }
 
-    // Create new report
-    const newReport = new Report({
-      promptId,
-      reporterAddress: reporterAddress.toLowerCase(),
+    // Canonicalize stored promptId to the on-chain id when available so
+    // duplicate detection matches marketplace UI submissions.
+    const canonicalPromptId = String(
+      (prompt as any).onChainId ||
+        (prompt as any).onChainReference ||
+        prompt._id,
+    );
+
+    const reporter = String(reporterAddress).toLowerCase();
+
+    // Duplicate open report: same prompt + reporter + reason still pending/investigating
+    const existingOpen = await Report.findOne({
+      promptId: { $in: [canonicalPromptId, promptIdStr, String(prompt._id)] },
+      reporterAddress: reporter,
       reason,
-      description: description || "",
+      status: { $in: ["pending", "investigating"] },
+    }).lean();
+
+    if (existingOpen) {
+      return res.status(409).json({
+        error:
+          "An open report already exists for this prompt, reason, and reporter",
+        reportId: String((existingOpen as any)._id),
+        status: (existingOpen as any).status,
+      });
+    }
+
+    const newReport = new Report({
+      promptId: canonicalPromptId,
+      reporterAddress: reporter,
+      reporterPrivate: reporterPrivate !== false,
+      reason,
+      description: typeof description === "string" ? description.slice(0, 500) : "",
+      evidence: normalizedEvidence,
+      status: "pending",
+      statusHistory: [],
     });
 
     await newReport.save();
+
+    // Never log free-form description / evidence notes (may contain sensitive content).
+    console.log("Prompt abuse report submitted", {
+      reportId: String(newReport._id),
+      promptId: canonicalPromptId,
+      reason,
+      evidenceCount: normalizedEvidence.length,
+      reporter: redactReporterAddress(reporter),
+    });
 
     return res.status(201).json({
       success: true,
       message: "Report submitted successfully",
       reportId: newReport._id,
+      status: newReport.status,
+      evidenceCount: normalizedEvidence.length,
     });
   } catch (err) {
     console.error("Submit report error:", err);
@@ -483,30 +612,144 @@ export const GetPromptReports = async (
   try {
     await connectDb();
 
-    // Check admin authentication (placeholder)
-    const adminToken = req.headers.authorization?.split(" ")[1];
-    if (!adminToken) {
+    const adminAddress =
+      typeof req.query.adminAddress === "string"
+        ? req.query.adminAddress
+        : undefined;
+    const adminSecretKey =
+      typeof (req.body as any)?.adminSecretKey === "string"
+        ? (req.body as any).adminSecretKey
+        : undefined;
+
+    if (!isAuthorizedReportModerator(req, adminAddress, adminSecretKey)) {
       return res.status(401).json({
         error: "Unauthorized: Admin token required",
       });
     }
 
-    const { searchParams } = new URL(req.url);
-    const promptId = searchParams.get("promptId");
-
-    const query: any = {};
-    if (promptId) {
-      query.promptId = promptId;
+    let promptId: string | null = null;
+    let status: string | null = null;
+    if (typeof req.query.promptId === "string") {
+      promptId = req.query.promptId;
+    }
+    if (typeof req.query.status === "string") {
+      status = req.query.status;
+    }
+    // Fallback for handlers that pass a raw URL without Express query parsing
+    if (!promptId && req.url) {
+      try {
+        const { searchParams } = new URL(req.url, "http://localhost");
+        promptId = searchParams.get("promptId");
+        status = status || searchParams.get("status");
+      } catch {
+        // ignore
+      }
     }
 
-    const reports = await Report.find(query)
-      .sort({ createdAt: -1 });
+    const query: Record<string, unknown> = {};
+    if (promptId) query.promptId = promptId;
+    if (status) query.status = status;
 
-    return res.json(reports);
+    const reports = await Report.find(query).sort({ createdAt: -1 });
+
+    return res.json(reports.map(serializeReportForAdmin));
   } catch (err) {
     console.error("Get reports error:", err);
     return res.status(500).json({
       error: (err as Error).message || "Failed to fetch reports",
+    });
+  }
+};
+
+export const UpdatePromptReportStatus = async (
+  req: Request,
+  res: Response,
+): Promise<Response<any>> => {
+  try {
+    await connectDb();
+
+    const reportId = String(req.params.id || req.body?.reportId || "");
+    const {
+      status,
+      adminNotes,
+      actor,
+      adminAddress,
+      adminSecretKey,
+      notes,
+    } = req.body ?? {};
+
+    const moderator = String(actor || adminAddress || "").trim();
+
+    if (!reportId || !status || !moderator) {
+      return res.status(400).json({
+        error: "reportId (or :id), status, and actor/adminAddress are required",
+      });
+    }
+
+    if (!isAuthorizedReportModerator(req, moderator, adminSecretKey)) {
+      return res.status(403).json({
+        error: "Unauthorized: Maintainer/Admin permissions required to update report status",
+      });
+    }
+
+    const report = await Report.findById(reportId);
+    if (!report) {
+      return res.status(404).json({ error: "Report not found" });
+    }
+
+    let transition;
+    try {
+      transition = buildStatusTransition({
+        from: report.status as ReportStatus,
+        to: status as ReportStatus,
+        actor: moderator,
+        notes: typeof notes === "string" ? notes : undefined,
+      });
+    } catch (err) {
+      if (err instanceof StatusTransitionError) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+
+    report.status = transition.to;
+    report.statusHistory = [
+      ...(Array.isArray(report.statusHistory) ? report.statusHistory : []),
+      {
+        from: transition.from,
+        to: transition.to,
+        actor: transition.actor,
+        notes: transition.notes,
+        at: new Date(transition.at),
+      },
+    ];
+    report.moderatedBy = transition.actor;
+    if (typeof adminNotes === "string") {
+      report.adminNotes = adminNotes.slice(0, 2000);
+    }
+    if (isTerminalStatus(transition.to)) {
+      report.resolvedAt = new Date();
+    } else if (isOpenReportStatus(transition.to)) {
+      report.resolvedAt = null;
+    }
+
+    await report.save();
+
+    console.log("Prompt abuse report status updated", {
+      reportId: String(report._id),
+      from: transition.from,
+      to: transition.to,
+      actor: redactReporterAddress(transition.actor),
+    });
+
+    return res.status(200).json({
+      success: true,
+      report: serializeReportForAdmin(report),
+    });
+  } catch (err) {
+    console.error("Update report status error:", err);
+    return res.status(500).json({
+      error: (err as Error).message || "Failed to update report status",
     });
   }
 };
