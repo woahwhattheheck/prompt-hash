@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAsyncTransaction } from "../components/useAsyncTransaction";
 import { Skeleton } from "../components/Skeleton";
+import { listAsset } from "@/lib/marketplace/marketplaceTx";
 
 // 1. Mock: Fetching draft metadata/validation before listing
 const fetchDraftMetadata = async () => {
@@ -17,18 +18,16 @@ const fetchDraftMetadata = async () => {
   });
 };
 
-// 2. Mock: Stellar Soroban contract call for listing the asset
-const listAssetContractCall = async (_data: any) => {
-  void _data;
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      // Simulate a random failure (like 'op_not_authorized' or 'tx_bad_auth')
-      // The useAsyncTransaction hook will automatically catch this, translate it, and render the StatusBanner.
-      if (Math.random() < 0.2) reject(new Error("op_not_authorized"));
-      resolve(true);
-    }, 2500);
-  });
+// 2. Listing goes through the marketplace facade (#154).
+// Demo mode (?demo=1) uses deterministic fixtures; production never uses stochastic outcomes.
+const listAssetContractCall = async (data: {
+  name: string;
+  price: string;
+  description: string;
+}) => {
+  return listAsset(data);
 };
+
 
 export default function Sell() {
   const navigate = useNavigate();

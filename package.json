@@ -12,7 +12,7 @@
     "dev": "node scripts/check-local-setup.mjs --warn-only && vite",
     "start": "vite",
     "build": "vite build",
-    "prebuild": "node scripts/check-local-setup.mjs --warn-only",
+    "prebuild": "node scripts/check-local-setup.mjs --warn-only && node scripts/guard-no-stochastic-marketplace.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:frontend": "vitest run",
@@ -23,7 +23,9 @@
     "lint": "eslint .",
     "format": "prettier . --write",
     "prepare": "husky",
-    "check:setup": "node scripts/check-local-setup.mjs"
+    "check:setup": "node scripts/check-local-setup.mjs",
+    "guard:marketplace-stochastic": "node scripts/guard-no-stochastic-marketplace.mjs",
+    "test:marketplace-release-safety": "vitest run src/lib/marketplace/marketplaceTx.test.ts src/components/PurchaseProgress.test.tsx && node scripts/guard-no-stochastic-marketplace.mjs"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^1.9.5",

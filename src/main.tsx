@@ -82,6 +82,7 @@ import { NotificationProvider } from "./providers/NotificationProvider.tsx";
 import { ContractSyncProvider } from "./providers/ContractSyncProvider.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { ThemeProvider } from "./components/theme-provider.tsx";
+import { assertDemoMarketplaceSafe } from "@/lib/marketplace/demoMode";
 
 // ── Sentry frontend monitoring (#332) ─────────────────────────────────────
 // Set PUBLIC_SENTRY_DSN in .env to enable error reporting.
@@ -122,6 +123,7 @@ const queryClient = new QueryClient({
   },
 });
 
+assertDemoMarketplaceSafe();
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     <ErrorBoundary>

@@ -57,3 +57,15 @@ Prefer real user journeys at the component or page-flow level:
 - Do not depend on a live Soroban RPC or Horizon server.
 - Keep mock responses deterministic.
 - Prefer explicit text assertions over snapshots for async marketplace flows.
+
+
+## Marketplace release safety (#154)
+
+Marketplace list/buy/progress flows must not use `Math.random()` for transaction
+outcomes. Production uses the live adapter; deterministic fixtures are opt-in via
+`?demo=1` / `?e2e=1` / `VITE_ENABLE_DEMO_MARKETPLACE=1`. See
+[marketplace-release-safety.md](./marketplace-release-safety.md).
+
+```bash
+npm run test:marketplace-release-safety
+```

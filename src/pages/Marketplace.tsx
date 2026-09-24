@@ -4,6 +4,8 @@ import { useAsyncTransaction } from "../components/useAsyncTransaction";
 import { Skeleton } from "../components/Skeleton";
 import { usePerformanceAudit } from "@/hooks/usePerformanceAudit";
 import { MarketplaceActivityFeed } from "@/components/MarketplaceActivityFeed";
+import { buyAsset } from "@/lib/marketplace/marketplaceTx";
+import { useWallet } from "@/hooks/useWallet";
 
 export interface MarketplaceItem {
   id: string;
@@ -12,18 +14,12 @@ export interface MarketplaceItem {
   isSold: boolean;
 }
 
-// Simulating a Stellar Soroban contract call
-const buyAssetContractCall = async (_itemId: string) => {
-  void _itemId;
-  // E.g., await contract.call('buy_asset', { id: itemId });
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      // Simulate a random failure for demonstration of the Retry recovery flow
-      if (Math.random() < 0.2) return reject(new Error("op_underfunded"));
-      resolve(true);
-    }, 2000);
-  });
+// Purchase goes through the marketplace facade (#154).
+// Demo mode uses deterministic fixtures; production never uses stochastic outcomes.
+const buyAssetContractCall = async (itemId: string, userAddress: string) => {
+  return buyAsset(itemId, userAddress);
 };
+
 
 /** Placeholder card shown during initial data fetch (#230). */
 function MarketplaceSkeletonCard() {
@@ -59,6 +55,7 @@ function MarketplaceEmptyState() {
 
 export default function Marketplace() {
   const queryClient = useQueryClient();
+  const { address: walletAddress } = useWallet();
   const [optimisticPurchases, setOptimisticPurchases] = useState<Set<string>>(new Set());
 
   const { markDone: markLoadDone } = usePerformanceAudit({ scope: "marketplace_load" });
@@ -85,7 +82,8 @@ export default function Marketplace() {
   // 2. Wrap purchase flow in useAsyncTransaction
   const { execute, isLoading: isPurchasing } = useAsyncTransaction(
     async (itemId: string) => {
-      await buyAssetContractCall(itemId);
+      if (!walletAddress) throw new Error("Wallet connection required.");
+      await buyAssetContractCall(itemId, walletAddress);
     },
     {
       pendingMessage: "Processing purchase on the Stellar network...",

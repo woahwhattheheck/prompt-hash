@@ -1,4 +1,7 @@
 import React, { useEffect, useReducer, useRef } from "react";
+import { runPurchaseFlow } from "@/lib/marketplace/marketplaceTx";
+import { useWallet } from "@/hooks/useWallet";
+import type { MarketplaceTxEvent } from "@/lib/marketplace/types";
 
 type Stage =
   | "idle"
@@ -66,6 +69,8 @@ export default function PurchaseProgress({
 }: Props) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const timers = useRef<number[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const { address: walletAddress } = useWallet();
 
   useEffect(() => {
     return () => {
@@ -111,66 +116,84 @@ export default function PurchaseProgress({
     },
   ];
 
-  const startFlow = () => {
-    dispatch({ type: "START" });
-
-    const t1 = window.setTimeout(() => {
-      const rejected = Math.random() < 0.15;
-      if (rejected) {
-        dispatch({
-          type: "ERROR",
-          message: "Transaction Failed: User rejected signature.",
-        });
-        return;
-      }
+  const applyEvent = (event: MarketplaceTxEvent) => {
+    if (event.phase === "signature") {
+      dispatch({
+        type: "SET_STAGE",
+        stage: "signature",
+        status: "pending",
+        message: event.message,
+      });
+      return;
+    }
+    if (event.phase === "network") {
       dispatch({
         type: "SET_STAGE",
         stage: "network",
-        message: "Broadcasting transaction to network...",
+        status: "pending",
+        message: event.message,
       });
+      return;
+    }
+    if (event.phase === "confirming") {
+      dispatch({
+        type: "SET_STAGE",
+        stage: "confirming",
+        status: "pending",
+        message: event.message,
+      });
+      return;
+    }
+    if (event.phase === "success") {
+      dispatch({ type: "SUCCESS", message: event.message });
+      return;
+    }
+    if (event.phase === "error") {
+      dispatch({ type: "ERROR", message: event.message });
+    }
+  };
 
-      const t2 = window.setTimeout(() => {
-        const networkFail = Math.random() < 0.1;
-        if (networkFail) {
-          dispatch({
-            type: "ERROR",
-            message: "Transaction Failed: network error or timeout.",
-          });
-          return;
+  const startFlow = () => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    dispatch({ type: "START" });
+
+    const address = walletAddress;
+    if (!address) {
+      dispatch({
+        type: "ERROR",
+        message: "Transaction Failed: Wallet connection required.",
+      });
+      return;
+    }
+
+    let sawErrorEvent = false;
+    void runPurchaseFlow({
+      itemId: "purchase-progress",
+      userAddress: address,
+      signal: abortRef.current.signal,
+      onEvent: (event) => {
+        if (event.phase === "error") {
+          sawErrorEvent = true;
         }
-
-        dispatch({
-          type: "SET_STAGE",
-          stage: "confirming",
-          message: "Confirming transaction and granting access...",
-        });
-
-        const t3 = window.setTimeout(() => {
-          const finalFail = Math.random() < 0.05;
-          if (finalFail) {
-            dispatch({
-              type: "ERROR",
-              message: "Transaction Failed: finalization error.",
-            });
-            return;
-          }
-
-          dispatch({
-            type: "SUCCESS",
-            message: "Access Granted! Your prompt is now unlocked.",
-          });
-        }, 1000);
-
-        timers.current.push(t3);
-      }, 1500);
-
-      timers.current.push(t2);
-    }, 1200);
-
-    timers.current.push(t1);
+        applyEvent(event);
+      },
+    }).catch((err) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (sawErrorEvent) return;
+      const message =
+        err instanceof Error ? err.message : "Transaction failed.";
+      dispatch({
+        type: "ERROR",
+        message: message.startsWith("Transaction Failed")
+          ? message
+          : `Transaction Failed: ${message}`,
+      });
+    });
   };
 
   const retry = () => {
+    abortRef.current?.abort();
     timers.current.forEach((t) => clearTimeout(t));
     timers.current = [];
     dispatch({ type: "RESET" });
@@ -179,6 +202,7 @@ export default function PurchaseProgress({
   };
 
   const close = () => {
+    abortRef.current?.abort();
     timers.current.forEach((t) => clearTimeout(t));
     timers.current = [];
     onClose();

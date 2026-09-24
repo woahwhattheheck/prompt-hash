@@ -5,6 +5,8 @@
  * TODO: Restore real Soroban contract integration before release.
  */
 import { Server } from "@stellar/stellar-sdk/rpc";
+import { isDemoMarketplaceEnabled } from "@/lib/marketplace/demoMode";
+import { demoTxHashFor } from "@/lib/marketplace/demo/demoMarketplaceAdapter";
 
 let hasWarnedMock = false;
 const warnMockUse = () => {
@@ -93,11 +95,26 @@ export class PromptHashClient {
    * Invokes the Soroban contract to purchase a prompt.
    */
   static async purchasePrompt(
-    _itemId: string,
-    _userAddress: string,
+    itemId: string,
+    userAddress: string,
     options?: { forceFailure?: string; delay?: number },
   ): Promise<{ txHash: string; success: boolean }> {
     warnMockUse();
+
+    // Production builds must never invent synthetic hashes (#154).
+    if (import.meta.env.PROD) {
+      throw new Error(
+        "[release-safety] PromptHashClient.purchasePrompt mock is disabled in production. Use the live marketplace adapter / Soroban path (#154).",
+      );
+    }
+
+    // Outside opt-in demo/e2e/test mode, refuse silent mock success.
+    if (!isDemoMarketplaceEnabled()) {
+      throw new Error(
+        "[release-safety] Mock purchase requires opt-in demo marketplace mode (?demo=1, ?e2e=1, or VITE_ENABLE_DEMO_MARKETPLACE=1). Stochastic / synthetic hashes are disabled (#154).",
+      );
+    }
+
     return new Promise((resolve, reject) => {
       const delay = options?.delay ?? 2000;
       setTimeout(() => {
@@ -105,8 +122,10 @@ export class PromptHashClient {
           return reject(new Error(options.forceFailure));
         }
 
-        const mockHash =
-          "tx_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
+        // Deterministic demo hash (no Math.random).
+        const mockHash = demoTxHashFor("success");
+        void itemId;
+        void userAddress;
         resolve({ txHash: mockHash, success: true });
       }, delay);
     });

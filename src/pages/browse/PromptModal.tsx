@@ -384,10 +384,13 @@ export const PromptModal: React.FC<PromptModalProps> = ({
       }
       
       setStatus("AWAITING_APPROVAL");
-      const mockHash = "tx_" + Math.random().toString(16).slice(2, 14);
-      setTxHash(mockHash);
+      // Do not invent a synthetic hash before the authoritative purchase result (#154).
       setStatus("CONFIRMING");
-      return await PromptHashClient.purchasePrompt(itemId, wallet.address);
+      const result = await PromptHashClient.purchasePrompt(itemId, wallet.address);
+      if (result.txHash) {
+        setTxHash(result.txHash);
+      }
+      return result;
     },
     {
       onSuccess: (data) => {

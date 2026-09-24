@@ -176,3 +176,7 @@ staging, production):
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API | `https://app.example.com,https://staging.example.com` |
 | `TRUSTED_PROXY_HOPS` | Number of trusted reverse-proxy hops in front of the server | `1` |
+
+## Marketplace release safety (#154)
+
+Production marketplace UI must not use stochastic transaction outcomes or synthetic random hashes. See [marketplace-release-safety.md](./marketplace-release-safety.md).
