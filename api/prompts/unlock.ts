@@ -37,6 +37,12 @@ import { recordAuditEvent } from "../../server/src/services/auditTrail";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 import { validateUnlockSecrets } from "../../src/lib/validation/envValidator";
 import { unlockSchema } from "../../src/lib/validation/apiSchemas";
+import {
+  POLICY_UNAVAILABLE_MESSAGE,
+  evaluateUnlockFulfillmentPolicy,
+  findFulfillmentRecord,
+  globalUnlockPolicyCache,
+} from "../../src/lib/unlock/unlockPolicy";
 
 export interface UnlockRequest {
   token: string;
@@ -325,26 +331,58 @@ const redactedAddress = String(address).slice(0, 8) + "...";
       return;
     }
 
-    // Dynamic dispute hold check against FulfillmentRecord collection
-    try {
-      const FulfillmentRecord = (await import("../../server/src/models/FulfillmentRecord")).default;
-      const fulfillment = await FulfillmentRecord.findOne({
+    // Dynamic dispute / refund hold — fail closed on lookup errors (#166).
+    // Delisting / retention already enforced above via validateKeyPolicy.
+    const policyDecision = await evaluateUnlockFulfillmentPolicy({
+      promptId: String(promptId),
+      buyerWallet: String(address),
+      findFulfillment: findFulfillmentRecord,
+      signingSecret: challengeSecret,
+      cache: globalUnlockPolicyCache,
+    });
+    if (policyDecision.outcome === "deny") {
+      req.logger.warn(
+        { address: redactedAddress, promptId, reason: policyDecision.reason },
+        "Unlock blocked by fulfillment policy",
+      );
+      metrics.trackUnlockFailure(String(address), String(promptId), policyDecision.reason);
+      void recordAuditEvent({
+        action: "unlock_policy_denied",
+        result: "blocked",
         promptId: String(promptId),
-        buyerWallet: String(address).toLowerCase(),
+        walletAddress: String(address),
+        requestId: req.requestId ?? null,
+        clientIp,
+        reason: policyDecision.reason,
       });
-      if (fulfillment) {
-        if (fulfillment.status === "refund_requested") {
-          res.status(403).json(apiError(ErrorCode.ACCESS_NOT_PURCHASED, "Access is temporarily held due to an open dispute."));
-          return;
-        }
-        if (fulfillment.status === "refunded") {
-          res.status(403).json(apiError(ErrorCode.ACCESS_NOT_PURCHASED, "Access has been revoked following a refund."));
-          return;
-        }
-      }
-    } catch (dbErr) {
-      // Fire-and-forget: fail-safe db connection warnings
-      req.logger.warn({ promptId, error: dbErr instanceof Error ? dbErr.message : String(dbErr) }, "Fulfillment dispute checks bypassed");
+      res.status(403).json(
+        apiError(ErrorCode.ACCESS_NOT_PURCHASED, policyDecision.message),
+      );
+      return;
+    }
+    if (policyDecision.outcome === "unavailable") {
+      req.logger.warn(
+        {
+          address: redactedAddress,
+          promptId,
+          cause: policyDecision.cause,
+        },
+        "Unlock policy lookup unavailable (fail closed)",
+      );
+      metrics.trackUnlockFailure(String(address), String(promptId), "policy_unavailable");
+      void recordAuditEvent({
+        action: "unlock_policy_unavailable",
+        result: "blocked",
+        promptId: String(promptId),
+        walletAddress: String(address),
+        requestId: req.requestId ?? null,
+        clientIp,
+        reason: "policy_lookup_failed",
+      });
+      res.status(503).json(
+        apiError(ErrorCode.TEMPORARY_FAILURE, POLICY_UNAVAILABLE_MESSAGE),
+      );
+      return;
     }
 
     // 6. Decrypt plaintext content

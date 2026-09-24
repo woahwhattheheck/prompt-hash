@@ -19,6 +19,7 @@
     "test:frontend:watch": "vitest",
     "test:e2e": "playwright test",
     "test:contract": "cargo test -p prompt-hash",
+    "test:unlock-policy": "vitest run --config vitest.unlock-policy.config.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier . --write",

@@ -70,7 +70,21 @@ vi.mock("../../server/src/services/webhookDispatcher", () => ({
   dispatchEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+const findFulfillmentRecordMock = vi.fn().mockResolvedValue(null);
+
+vi.mock("../../src/lib/unlock/unlockPolicy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/unlock/unlockPolicy")>();
+  return {
+    ...actual,
+    findFulfillmentRecord: (...args: unknown[]) => findFulfillmentRecordMock(...args),
+  };
+});
+
 import handler from "./unlock";
+import {
+  POLICY_UNAVAILABLE_MESSAGE,
+  globalUnlockPolicyCache,
+} from "../../src/lib/unlock/unlockPolicy";
 
 async function setupUnlockFixture(plaintext = "Secret prompt instructions for buyers.", ttlMs = 5 * 60 * 1000) {
   const buyer = Keypair.random();
@@ -153,6 +167,8 @@ describe("unlock API integrity and replay protection checks (#37)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     globalNonceLedger.clear();
+    globalUnlockPolicyCache.clear();
+    findFulfillmentRecordMock.mockResolvedValue(null);
   });
 
   it("returns plaintext when decrypted content matches the stored hash", async () => {
@@ -433,5 +449,85 @@ describe("Envelope Encryption and KMS Key Custody (#79)", () => {
 
     expect(statusRevoked).toBe(403);
     expect(dataRevoked.error).toContain("revoked");
+  });
+});
+
+
+describe("unlock fail-closed fulfillment policy (#166)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalNonceLedger.clear();
+    globalUnlockPolicyCache.clear();
+    findFulfillmentRecordMock.mockResolvedValue(null);
+  });
+
+  it("returns TEMPORARY_FAILURE when fulfillment lookup throws (no decrypt)", async () => {
+    const { buyer, promptId, challenge, signedMessage } = await setupUnlockFixture();
+    findFulfillmentRecordMock.mockRejectedValue(
+      new Error("MongoServerError: connection refused"),
+    );
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(503);
+    expect(responseData.code).toBe(ErrorCode.TEMPORARY_FAILURE);
+    expect(responseData.error).toBe(POLICY_UNAVAILABLE_MESSAGE);
+    expect(JSON.stringify(responseData)).not.toMatch(/mongo|ECONNREFUSED|bypassed/i);
+    expect(decryptPromptCiphertextMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks refunded buyers with ACCESS_NOT_PURCHASED", async () => {
+    const { buyer, promptId, challenge, signedMessage } = await setupUnlockFixture();
+    findFulfillmentRecordMock.mockResolvedValue({ status: "refunded" });
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(403);
+    expect(responseData.code).toBe(ErrorCode.ACCESS_NOT_PURCHASED);
+    expect(String(responseData.error)).toMatch(/refund/i);
+    expect(decryptPromptCiphertextMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks open disputes (refund_requested)", async () => {
+    const { buyer, promptId, challenge, signedMessage } = await setupUnlockFixture();
+    findFulfillmentRecordMock.mockResolvedValue({ status: "refund_requested" });
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(403);
+    expect(responseData.code).toBe(ErrorCode.ACCESS_NOT_PURCHASED);
+    expect(String(responseData.error)).toMatch(/dispute/i);
+    expect(decryptPromptCiphertextMock).not.toHaveBeenCalled();
+  });
+
+  it("allows unlock when no fulfillment record exists", async () => {
+    const { buyer, promptId, challenge, signedMessage, plaintext } =
+      await setupUnlockFixture();
+    findFulfillmentRecordMock.mockResolvedValue(null);
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.plaintext).toBe(plaintext);
   });
 });
