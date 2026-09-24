@@ -176,3 +176,14 @@ staging, production):
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API | `https://app.example.com,https://staging.example.com` |
 | `TRUSTED_PROXY_HOPS` | Number of trusted reverse-proxy hops in front of the server | `1` |
+
+## Sitemap canonical origin
+
+The Vercel sitemap handler (`api/sitemap.xml.ts`) must not trust request
+`Host` / `Forwarded` headers when building cached `<loc>` URLs. Origin
+resolution and cache policy are documented in [`sitemap-origin.md`](./sitemap-origin.md).
+
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `SITE_URL` | Preferred canonical public origin for sitemap `<loc>` URLs | `https://prompthash.io` |
+| `APP_URL` | Accepted fallback (same idea as notification email links) | `https://prompthash.io` |
