@@ -4,6 +4,15 @@ export type CacheReadResult =
   | { status: "hit"; value: string }
   | { status: "miss" | "bypass" | "unavailable"; value: null };
 
+export type CacheInvalidationMetrics = {
+  pattern: string;
+  durationMs: number;
+  scannedKeys: number;
+  deletedKeys: number;
+  scanBatches: number;
+  failures: number;
+};
+
 let client: RedisClientType | null = null;
 let initialization: Promise<RedisClientType> | null = null;
 let initializingClient: RedisClientType | null = null;
@@ -16,9 +25,15 @@ const inFlightLoads = new Map<string, InFlightLoad>();
 const keyInvalidationVersions = new Map<string, number>();
 const patternInvalidationVersions = new Map<string, number>();
 let invalidationVersion = 0;
+let lastInvalidationMetrics: CacheInvalidationMetrics | null = null;
+
 const DEFAULT_TTL = 60;
 const COMMAND_TIMEOUT_MS = 250;
 const RETRY_DELAY_MS = 1_000;
+/** Hint for Redis SCAN COUNT — bounds work per hop so unrelated traffic can interleave. */
+export const SCAN_BATCH_SIZE = 100;
+/** Max keys deleted per DEL call (matches SCAN batch). */
+export const DELETE_BATCH_SIZE = 100;
 
 type CacheOperation = "connect" | "get" | "set" | "delete" | "scan" | "parse";
 
@@ -39,6 +54,18 @@ function reportUnavailable(operation: CacheOperation, error: unknown): void {
     operation,
     status: "unavailable",
     code: errorCode(error),
+  });
+}
+
+function reportInvalidation(metrics: CacheInvalidationMetrics): void {
+  lastInvalidationMetrics = metrics;
+  console.info("[cache] invalidate", {
+    pattern: metrics.pattern,
+    durationMs: metrics.durationMs,
+    scannedKeys: metrics.scannedKeys,
+    deletedKeys: metrics.deletedKeys,
+    scanBatches: metrics.scanBatches,
+    failures: metrics.failures,
   });
 }
 
@@ -63,6 +90,16 @@ function invalidateKeys(keys: string[]): void {
 
 function invalidatePattern(pattern: string): void {
   patternInvalidationVersions.set(pattern, ++invalidationVersion);
+}
+
+function cursorIsDone(cursor: string | number): boolean {
+  return cursor === 0 || cursor === "0";
+}
+
+function normalizeCursor(cursor: string | number | { toString(): string }): string {
+  if (typeof cursor === "number") return String(cursor);
+  if (typeof cursor === "string") return cursor;
+  return String(cursor);
 }
 
 async function withTimeout<T>(operation: Promise<T>): Promise<T> {
@@ -171,16 +208,70 @@ export async function cacheDel(...keys: string[]): Promise<void> {
   }
 }
 
+/**
+ * Invalidate keys matching a Redis glob pattern without issuing KEYS.
+ * Uses cursor SCAN with a bounded COUNT, deleting each hop's matches in a
+ * separate DEL so unrelated cache traffic can interleave between batches.
+ */
 export async function cacheDelPattern(pattern: string): Promise<void> {
   invalidatePattern(pattern);
+  const started = Date.now();
+  const metrics: CacheInvalidationMetrics = {
+    pattern,
+    durationMs: 0,
+    scannedKeys: 0,
+    deletedKeys: 0,
+    scanBatches: 0,
+    failures: 0,
+  };
+
   let activeClient: RedisClientType | null = null;
   try {
     activeClient = await getClient();
-    if (!activeClient) return;
-    const keys = await withTimeout(activeClient.keys(pattern));
-    if (keys.length) await withTimeout(activeClient.del(keys));
+    if (!activeClient) {
+      metrics.durationMs = Date.now() - started;
+      reportInvalidation(metrics);
+      return;
+    }
+
+    let cursor: string = "0";
+    do {
+      const reply = await withTimeout(
+        activeClient.scan(cursor, { MATCH: pattern, COUNT: SCAN_BATCH_SIZE }),
+      );
+      metrics.scanBatches += 1;
+      cursor = normalizeCursor(reply.cursor);
+
+      const keys = (reply.keys ?? []).map((key) =>
+        typeof key === "string" ? key : String(key),
+      );
+      metrics.scannedKeys += keys.length;
+      if (!keys.length) continue;
+
+      for (let offset = 0; offset < keys.length; offset += DELETE_BATCH_SIZE) {
+        const chunk = keys.slice(offset, offset + DELETE_BATCH_SIZE);
+        try {
+          const removed = await withTimeout(activeClient.del(chunk));
+          metrics.deletedKeys += typeof removed === "number" ? removed : chunk.length;
+        } catch (error) {
+          metrics.failures += 1;
+          // Soft-fail a single delete batch so remaining SCAN hops can proceed;
+          // hard client death is handled by the outer catch after destroy.
+          if (error instanceof CacheTimeoutError) throw error;
+          console.warn("[cache] invalidate batch failed", {
+            pattern,
+            batchSize: chunk.length,
+            code: errorCode(error),
+          });
+        }
+      }
+    } while (!cursorIsDone(cursor));
   } catch (error) {
+    metrics.failures += 1;
     if (activeClient) invalidate(activeClient, "scan", error);
+  } finally {
+    metrics.durationMs = Date.now() - started;
+    reportInvalidation(metrics);
   }
 }
 
@@ -223,6 +314,10 @@ export const CACHE_KEYS = {
   promptSearch: (query: string) => `prompts:search:${query}`,
 };
 
+export function __lastInvalidationMetricsForTests(): CacheInvalidationMetrics | null {
+  return lastInvalidationMetrics;
+}
+
 export function __resetCacheForTests(): void {
   lifecycleVersion += 1;
   const clients = new Set([client, initializingClient]);
@@ -241,4 +336,5 @@ export function __resetCacheForTests(): void {
   keyInvalidationVersions.clear();
   patternInvalidationVersions.clear();
   invalidationVersion = 0;
+  lastInvalidationMetrics = null;
 }

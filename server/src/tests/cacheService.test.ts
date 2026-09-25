@@ -31,7 +31,10 @@ function redisClient(overrides: Record<string, unknown> = {}) {
     get: jest.fn().mockResolvedValue(null),
     set: jest.fn().mockResolvedValue("OK"),
     del: jest.fn().mockResolvedValue(0),
-    keys: jest.fn().mockResolvedValue([]),
+    keys: jest.fn(() => {
+      throw new Error("KEYS must not be used in production cache paths");
+    }),
+    scan: jest.fn().mockResolvedValue({ cursor: "0", keys: [] }),
     destroy: jest.fn(),
     ...overrides,
   };

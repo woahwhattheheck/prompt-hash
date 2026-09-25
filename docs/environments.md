@@ -96,7 +96,7 @@ yarn dev
 | Variable | Used by |
 |----------|---------|
 | `PUBLIC_CHAT_API_BASE` | Chat UI |
-| `REDIS_URL` | Rate limiting (in-memory fallback) |
+| `REDIS_URL` | Rate limiting + server cache (`cacheService`; pattern invalidation uses SCAN — see `docs/operations/redis-cache-invalidation.md`) |
 | `ADMIN_ROTATION_TOKEN` | Secret rotation admin |
 | `CHALLENGE_TOKEN_SECRET_PREVIOUS` | Rotation grace period |
 | `MONGODB_URI` | `server/` draft & buyer APIs |
