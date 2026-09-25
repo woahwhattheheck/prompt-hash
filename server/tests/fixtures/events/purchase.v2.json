@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "lifecycle": "purchase",
+  "contractEvent": "PromptPurchased",
+  "description": "V2 purchase \u2014 includes referrer address and optional license_id",
+  "envelope": {
+    "ledger": 2000002,
+    "txHash": "e5f60718293a4b5c6d7e8f901234567890abcdef1234567890abcdef01234567",
+    "eventIndex": 2,
+    "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"
+  },
+  "topics": {
+    "prompt_id": 99
+  },
+  "value": {
+    "buyer": "GBMXHCFKH7EZGDKL7PXMZFQ6MFRCQOQMQVZNXPYWVB2VVQKPZQB5JVF",
+    "creator": "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3IFOKIJWVSYY",
+    "price_stroops": 25000000,
+    "referrer": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    "license_id": "lic_99_1"
+  },
+  "expected": {
+    "lifecycle": "purchase",
+    "contractEvent": "PromptPurchased",
+    "schemaVersion": 2,
+    "promptId": "99",
+    "fields": {
+      "prompt_id": "99",
+      "buyer": "gbmxhcfkh7ezgdkl7pxmzfq6mfrcqoqmqvznxpywvb2vvqkpzqb5jvf",
+      "creator": "gdqp2kpqgkihyjgxnuiyomharuarca7djt5fo2ffooky3ifokijwvsyy",
+      "price_stroops": "25000000",
+      "referrer": "gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaawhf",
+      "license_id": "lic_99_1"
+    }
+  }
+}

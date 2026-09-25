@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 99,
+  "lifecycle": "publish",
+  "contractEvent": "PromptCreated",
+  "description": "Future schema version \u2014 must dead-letter, never crash",
+  "envelope": {
+    "ledger": 9000001,
+    "txHash": "99aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "eventIndex": 0
+  },
+  "topics": {
+    "prompt_id": 1
+  },
+  "value": {
+    "creator": "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3IFOKIJWVSYY",
+    "price_stroops": 1,
+    "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+  }
+}

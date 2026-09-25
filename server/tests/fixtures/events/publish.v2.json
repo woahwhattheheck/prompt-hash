@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "lifecycle": "publish",
+  "contractEvent": "PromptCreated",
+  "description": "V2 publish \u2014 v1 fields plus optional content_hash / metadata_uri for indexer enrichment",
+  "envelope": {
+    "ledger": 2000001,
+    "txHash": "d4e5f60718293a4b5c6d7e8f901234567890abcdef1234567890abcdef012345",
+    "eventIndex": 0,
+    "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"
+  },
+  "topics": {
+    "prompt_id": 99
+  },
+  "value": {
+    "creator": "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3IFOKIJWVSYY",
+    "price_stroops": 25000000,
+    "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "metadata_uri": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+  },
+  "expected": {
+    "lifecycle": "publish",
+    "contractEvent": "PromptCreated",
+    "schemaVersion": 2,
+    "promptId": "99",
+    "fields": {
+      "prompt_id": "99",
+      "creator": "gdqp2kpqgkihyjgxnuiyomharuarca7djt5fo2ffooky3ifokijwvsyy",
+      "price_stroops": "25000000",
+      "asset": "cdlzfc3syjydzt7k67vz75hpjvieuvnixf47zg2fb2rmqqvu2hhgcysc",
+      "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "metadata_uri": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    }
+  }
+}

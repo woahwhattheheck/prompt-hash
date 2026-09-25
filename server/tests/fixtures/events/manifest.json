@@ -1,0 +1,25 @@
+{
+  "description": "Versioned fixtures for PromptHash lifecycle events (issue #246).",
+  "contractSource": "contracts/prompt-hash/src/events.rs",
+  "lifecycleMapping": {
+    "publish": "PromptCreated",
+    "purchase": "PromptPurchased",
+    "unlock": "EscrowReleased"
+  },
+  "supportedSchemaVersions": [1, 2],
+  "fixtures": {
+    "supported": [
+      "publish.v1.json",
+      "purchase.v1.json",
+      "unlock.v1.json",
+      "publish.v2.json",
+      "purchase.v2.json",
+      "unlock.v2.json"
+    ],
+    "unsupported": [
+      "unsupported.schema_v99.json",
+      "unsupported.unknown_type.json",
+      "unsupported.missing_fields.json"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "lifecycle": "teleport",
+  "contractEvent": "PromptTeleported",
+  "description": "Unknown lifecycle / contract event — dead-letter as UNKNOWN_EVENT_TYPE",
+  "topics": {
+    "prompt_id": 7
+  },
+  "value": {
+    "destination": "mars"
+  }
+}

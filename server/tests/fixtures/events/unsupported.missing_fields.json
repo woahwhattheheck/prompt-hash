@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "lifecycle": "purchase",
+  "contractEvent": "PromptPurchased",
+  "description": "Supported version but missing required buyer — SCHEMA_VALIDATION_FAILED",
+  "topics": {
+    "prompt_id": 7
+  },
+  "value": {
+    "creator": "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3IFOKIJWVSYY",
+    "price_stroops": 10000000
+  }
+}
