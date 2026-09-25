@@ -1,5 +1,6 @@
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
 import { formatPriceLabel } from "@/lib/stellar/format";
+import { comparePromptSalesDesc } from "@/lib/prompts/promptOrdering";
 
 export interface CreatorAnalytics {
   activeListings: number;
@@ -22,12 +23,7 @@ export function calculateCreatorAnalytics(
       0n,
     ),
     topPrompts: [...prompts]
-      .sort((left, right) => {
-        if (right.salesCount !== left.salesCount) {
-          return right.salesCount - left.salesCount;
-        }
-        return Number(left.id - right.id);
-      })
+      .sort(comparePromptSalesDesc)
       .slice(0, topPromptLimit),
   };
 }

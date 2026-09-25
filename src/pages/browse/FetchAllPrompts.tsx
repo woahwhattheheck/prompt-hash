@@ -26,6 +26,7 @@ import {
   unsavePromptListing,
 } from "@/lib/prompts/library";
 import { stroopsToXlmString, xlmToStroops } from "@/lib/stellar/format";
+import { sortPromptsBy } from "@/lib/prompts/promptOrdering";
 import { PromptCard } from "./PromptCard";
 import { PromptModal } from "./PromptModal";
 import { NoResultsSuggestions } from "./NoResultsSuggestions";
@@ -248,20 +249,7 @@ const FetchAllPrompts = ({
       prompts = rankPrompts(prompts, searchQuery, selectedCategory);
     }
 
-    switch (sortBy) {
-      case "price-low":
-        return [...prompts].sort((a, b) =>
-          a.priceStroops < b.priceStroops ? -1 : 1,
-        );
-      case "price-high":
-        return [...prompts].sort((a, b) =>
-          a.priceStroops > b.priceStroops ? -1 : 1,
-        );
-      case "sales":
-        return [...prompts].sort((a, b) => b.salesCount - a.salesCount);
-      default:
-        return [...prompts].sort((a, b) => Number(b.id - a.id));
-    }
+    return sortPromptsBy(prompts, sortBy);
   }, [
     priceRange,
     promptsQuery.data,

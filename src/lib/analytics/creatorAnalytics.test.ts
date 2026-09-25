@@ -38,6 +38,23 @@ describe("creator analytics", () => {
     expect(formatEstimatedGrossRevenue(107_500_000n)).toBe("Estimated 10.75 XLM");
   });
 
+
+  it("tie-breaks equal sales by ascending id without Number coercion (#178)", () => {
+    const above = BigInt(Number.MAX_SAFE_INTEGER) + 9n;
+    const analytics = calculateCreatorAnalytics([
+      prompt({ id: above + 2n, salesCount: 4 }),
+      prompt({ id: above, salesCount: 4 }),
+      prompt({ id: above + 1n, salesCount: 4 }),
+      prompt({ id: 1n, salesCount: 1 }),
+    ]);
+    expect(analytics.topPrompts.map(({ id }) => id)).toEqual([
+      above,
+      above + 1n,
+      above + 2n,
+      1n,
+    ]);
+  });
+
   it("returns a stable empty state", () => {
     expect(calculateCreatorAnalytics([])).toEqual({
       activeListings: 0,

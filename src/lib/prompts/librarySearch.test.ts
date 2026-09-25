@@ -88,6 +88,39 @@ describe("librarySearch utilities (#35)", () => {
     expect(results[2].id).toBe(1n); // 10000000n
   });
 
+
+  it("sorts extreme bigint IDs newest/oldest without Number coercion (#178)", () => {
+    const above = BigInt(Number.MAX_SAFE_INTEGER) + 100n;
+    const extreme: PromptRecord[] = [
+      { ...mockPrompts[0], id: above, title: "mid" },
+      { ...mockPrompts[1], id: above + 3n, title: "newest" },
+      { ...mockPrompts[2], id: above - 3n, title: "oldest" },
+    ];
+    expect(filterLibraryPrompts(extreme, "", "all", "all", "newest").map((p) => p.title)).toEqual([
+      "newest",
+      "mid",
+      "oldest",
+    ]);
+    expect(filterLibraryPrompts(extreme, "", "all", "all", "oldest").map((p) => p.title)).toEqual([
+      "oldest",
+      "mid",
+      "newest",
+    ]);
+  });
+
+  it("keeps equal-price tie-break stable by id (#178)", () => {
+    const above = BigInt(Number.MAX_SAFE_INTEGER) + 7n;
+    const tied: PromptRecord[] = [
+      { ...mockPrompts[0], id: above + 2n, priceStroops: above, title: "c" },
+      { ...mockPrompts[1], id: above, priceStroops: above, title: "a" },
+      { ...mockPrompts[2], id: above + 1n, priceStroops: above, title: "b" },
+    ];
+    const first = filterLibraryPrompts(tied, "", "all", "all", "price-low").map((p) => p.title);
+    const second = filterLibraryPrompts(tied, "", "all", "all", "price-low").map((p) => p.title);
+    expect(first).toEqual(["a", "b", "c"]);
+    expect(first).toEqual(second);
+  });
+
   describe("local unlock history tracking", () => {
     const wallet = "GBUYER1234567890ABCDEFGH1234567890ABCDEFGH1234567890";
 

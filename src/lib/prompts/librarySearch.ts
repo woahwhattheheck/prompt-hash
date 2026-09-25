@@ -6,6 +6,7 @@
  */
 
 import type { PromptRecord } from "../stellar/promptHashClient";
+import { sortPromptsBy } from "./promptOrdering";
 
 export type StatusFilter = "all" | "unlocked" | "locked";
 export type SortOption = "newest" | "oldest" | "price-high" | "price-low";
@@ -62,28 +63,7 @@ export function filterLibraryPrompts(
     return true;
   });
 
-  const sorted = [...filtered];
-  switch (sortOption) {
-    case "oldest":
-      sorted.sort((a, b) => Number(a.id - b.id));
-      break;
-    case "price-high":
-      sorted.sort((a, b) =>
-        a.priceStroops > b.priceStroops ? -1 : a.priceStroops < b.priceStroops ? 1 : 0,
-      );
-      break;
-    case "price-low":
-      sorted.sort((a, b) =>
-        a.priceStroops < b.priceStroops ? -1 : a.priceStroops > b.priceStroops ? 1 : 0,
-      );
-      break;
-    case "newest":
-    default:
-      sorted.sort((a, b) => Number(b.id - a.id));
-      break;
-  }
-
-  return sorted;
+  return sortPromptsBy(filtered, sortOption);
 }
 
 /**

@@ -1,5 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
+import {
+  priceStroopsWithinXlmBounds,
+  sortPromptsBy,
+} from "@/lib/prompts/promptOrdering";
 
 interface SearchFilters {
   query?: string;
@@ -105,27 +109,12 @@ export function useSearchPrompts(filters: SearchFilters, enabled = true) {
         }
         
         if (minPrice !== undefined || maxPrice !== undefined) {
-          filtered = filtered.filter((p) => {
-            const price = Number(p.priceStroops) / 10_000_000;
-            return (minPrice === undefined || price >= minPrice) &&
-                   (maxPrice === undefined || price <= maxPrice);
-          });
+          filtered = filtered.filter((p) =>
+            priceStroopsWithinXlmBounds(p.priceStroops, minPrice, maxPrice),
+          );
         }
-        
-        // Apply sorting
-        switch (sortBy) {
-          case "price-low":
-            filtered.sort((a, b) => Number(a.priceStroops - b.priceStroops));
-            break;
-          case "price-high":
-            filtered.sort((a, b) => Number(b.priceStroops - a.priceStroops));
-            break;
-          case "sales":
-            filtered.sort((a, b) => b.salesCount - a.salesCount);
-            break;
-          default:
-            filtered.sort((a, b) => Number(b.id - a.id));
-        }
+
+        filtered = sortPromptsBy(filtered, sortBy);
         
         const total = filtered.length;
         const totalPages = Math.ceil(total / limit);
