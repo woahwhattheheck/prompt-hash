@@ -1,11 +1,16 @@
 /**
  * Review Report Endpoint
- * 
+ *
  * Allows users to report a review for moderation due to spam, abuse, or inaccuracy.
  * Flags the review for maintainer/admin moderation without silently removing it.
+ * Report append is atomic on the durable store (#179).
  */
 
-import { reportReview } from "../../src/lib/reviews/reviewStore";
+import {
+  DuplicateReportError,
+  reportReview,
+  ReviewNotFoundError,
+} from "../../src/lib/reviews/reviewStore";
 
 export interface ReportReviewRequest {
   reviewId: string;
@@ -33,7 +38,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const updatedReview = reportReview(
+    const updatedReview = await reportReview(
       String(reviewId),
       String(promptId),
       String(reporterAddress),
@@ -58,9 +63,9 @@ export default async function handler(req: any, res: any) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to report review";
     console.error("Report review error:", message);
-    if (message.includes("already reported")) {
+    if (error instanceof DuplicateReportError || message.includes("already reported")) {
       res.status(409).json({ error: message });
-    } else if (message.includes("not found")) {
+    } else if (error instanceof ReviewNotFoundError || message.includes("not found")) {
       res.status(404).json({ error: message });
     } else {
       res.status(500).json({ error: message });

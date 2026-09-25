@@ -4,8 +4,13 @@ import Review from "../models/Review";
 import Purchase from "../models/Purchase";
 import { cacheDel } from "../services/cacheService";
 import { CACHE_KEYS } from "../services/cacheService";
+import { randomBytes } from "crypto";
 
 export const reviewRouter = express.Router();
+
+function newReviewId(): string {
+  return `review_${Date.now()}_${randomBytes(4).toString("hex")}`;
+}
 
 // POST /api/reviews/submit
 reviewRouter.post("/submit", async (req: Request, res: Response) => {
@@ -27,7 +32,6 @@ reviewRouter.post("/submit", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "rating must be an integer between 1 and 5" });
     }
 
-    // Verify ownership — buyer must have a purchase record for this prompt
     const purchase = await Purchase.findOne({
       promptId,
       buyerWallet: userAddress.toLowerCase(),
@@ -39,19 +43,38 @@ reviewRouter.post("/submit", async (req: Request, res: Response) => {
       });
     }
 
-    const review = await Review.findOneAndUpdate(
-      { promptId, userAddress: userAddress.toLowerCase() },
-      { rating, text: text ?? "", verified: true },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
+    // Atomic create — unique (promptId, userAddress). Do not upsert-overwrite;
+    // concurrent duplicates must yield exactly one review (#179).
+    try {
+      const review = await Review.create({
+        reviewId: newReviewId(),
+        promptId,
+        userAddress: userAddress.toLowerCase(),
+        rating,
+        text: text ?? "",
+        verified: true,
+        status: "visible",
+        reports: [],
+        reportCount: 0,
+      });
 
-    // Invalidate cached detail for this prompt so ratings refresh
-    await cacheDel(CACHE_KEYS.promptDetail(promptId));
+      await cacheDel(CACHE_KEYS.promptDetail(promptId));
 
-    return res.json({
-      success: true,
-      review: { id: review._id, rating: review.rating, createdAt: review.createdAt },
-    });
+      return res.status(201).json({
+        success: true,
+        review: {
+          id: review.reviewId ?? review._id,
+          rating: review.rating,
+          createdAt: review.createdAt,
+          status: review.status,
+        },
+      });
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && (err as { code?: number }).code === 11000) {
+        return res.status(409).json({ error: "You have already reviewed this prompt" });
+      }
+      throw err;
+    }
   } catch (err) {
     console.error("Review submit error:", err);
     return res.status(500).json({ error: "Failed to submit review" });
@@ -66,7 +89,12 @@ reviewRouter.get("/list", async (req: Request, res: Response) => {
     const { promptId } = req.query as { promptId?: string };
     if (!promptId) return res.status(400).json({ error: "promptId is required" });
 
-    const reviews = await Review.find({ promptId }).sort({ createdAt: -1 }).lean();
+    const reviews = await Review.find({
+      promptId,
+      status: { $ne: "hidden" },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
 
     const distribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     let sum = 0;
@@ -83,13 +111,14 @@ reviewRouter.get("/list", async (req: Request, res: Response) => {
 
     return res.json({
       reviews: reviews.map((r) => ({
-        id: r._id,
+        id: (r as { reviewId?: string }).reviewId ?? r._id,
         promptId: r.promptId,
         userAddress: r.userAddress,
         rating: r.rating,
         text: r.text,
         createdAt: new Date(r.createdAt as Date).getTime(),
         verified: r.verified,
+        status: (r as { status?: string }).status ?? "visible",
       })),
       stats,
     });

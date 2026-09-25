@@ -392,3 +392,7 @@ This is critical because PromptHash retries failed deliveries, which may result 
 Webhook endpoints should handle bursts gracefully. We recommend:
 - Return 200 quickly and process asynchronously
 - Use 429 with `Retry-After` header if your system is overloaded
+
+## See also
+
+- [Durable reviews](./durable-reviews.md) — persistence, uniqueness, seed removal (#179)

@@ -34,6 +34,7 @@ yarn dev
 | `CHALLENGE_TOKEN_SECRET` | long random string | platform secret | Vercel env secret |
 | `UNLOCK_*` keys | base64 NaCl keypair | production unlock keys | preview keys |
 | `MONGODB_URI` | local MongoDB | Atlas / hosted URI | preview DB URI |
+| `REVIEW_STORE_PATH` | OS temp `prompt-hash-reviews/reviews.json` | durable file path when Mongo unset (reviews #179) | same |
 | `STELLAR_SCAFFOLD_ENV` | `development` | `staging` or `testing` | `staging` |
 
 ### Local

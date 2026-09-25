@@ -6,14 +6,22 @@
  * other sensitive content).
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 
 vi.mock("../../src/lib/stellar/promptHashClient", () => ({
   hasAccess: vi.fn(),
 }));
 
 import reportHandler from "./report";
-import { resetReviewStore } from "../../src/lib/reviews/reviewStore";
+import {
+  addReview,
+  configureReviewRepository,
+  createFileReviewRepository,
+  resetReviewStore,
+} from "../../src/lib/reviews/reviewStore";
 
 function mockReqRes(body: Record<string, unknown>) {
   let statusCode = 0;
@@ -35,18 +43,41 @@ function mockReqRes(body: Record<string, unknown>) {
 }
 
 describe("Review report logging (#180)", () => {
-  beforeEach(() => {
-    resetReviewStore();
+  let storePath: string;
+
+  beforeEach(async () => {
+    storePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "ph-report-log-")),
+      "reviews.json",
+    );
+    configureReviewRepository(createFileReviewRepository(storePath));
+    await resetReviewStore();
+  });
+
+  afterEach(async () => {
+    configureReviewRepository(null);
+    try {
+      await fs.rm(path.dirname(storePath), { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   it("never logs the sensitive/PII-bearing report reason text", async () => {
+    const review = await addReview(
+      "1",
+      "GORIGINALREVIEWER",
+      5,
+      "Fixture review for report logging privacy assertions.",
+    );
+
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     const sentinelReason =
       "SENTINEL_PII user@example.com contains credit-card-4111111111111111 abuse details";
 
     const { req, res } = mockReqRes({
-      reviewId: "review_1",
+      reviewId: review.id,
       promptId: "1",
       reporterAddress: "GREPORTER1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
       reason: sentinelReason,

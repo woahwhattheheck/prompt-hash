@@ -1,11 +1,15 @@
 /**
  * Maintainer/Admin Review Moderation Endpoint
- * 
+ *
  * Affordances for maintainers to hide, unhide, or dismiss reports on prompt reviews.
  * Unauthorized requests are strictly rejected with 401/403.
+ * Transitions are applied atomically on durable storage (#179).
  */
 
-import { moderateReview } from "../../src/lib/reviews/reviewStore";
+import {
+  moderateReview,
+  ReviewNotFoundError,
+} from "../../src/lib/reviews/reviewStore";
 
 export interface ModerationRequest {
   reviewId: string;
@@ -16,7 +20,8 @@ export interface ModerationRequest {
 }
 
 function isAuthorizedAdmin(adminAddress: string, secretKey?: string, authHeader?: string): boolean {
-  const configuredAdmin = process.env.ADMIN_WALLET_ADDRESS ?? process.env.PUBLIC_STELLAR_SIMULATION_ACCOUNT ?? "";
+  const configuredAdmin =
+    process.env.ADMIN_WALLET_ADDRESS ?? process.env.PUBLIC_STELLAR_SIMULATION_ACCOUNT ?? "";
   const adminApiKey = process.env.ADMIN_API_KEY ?? "admin-secret-key";
 
   if (secretKey && secretKey === adminApiKey) {
@@ -27,7 +32,11 @@ function isAuthorizedAdmin(adminAddress: string, secretKey?: string, authHeader?
     return true;
   }
 
-  if (configuredAdmin && adminAddress && adminAddress.toLowerCase() === configuredAdmin.toLowerCase()) {
+  if (
+    configuredAdmin &&
+    adminAddress &&
+    adminAddress.toLowerCase() === configuredAdmin.toLowerCase()
+  ) {
     return true;
   }
 
@@ -41,7 +50,8 @@ export default async function handler(req: any, res: any) {
   }
 
   const authHeader = req.headers?.authorization;
-  const { reviewId, promptId, action, adminAddress, adminSecretKey }: ModerationRequest = req.body ?? {};
+  const { reviewId, promptId, action, adminAddress, adminSecretKey }: ModerationRequest =
+    req.body ?? {};
 
   if (!reviewId || !promptId || !action || !adminAddress) {
     res.status(400).json({ error: "reviewId, promptId, action, and adminAddress are required" });
@@ -53,16 +63,19 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  // Authorization check
   if (!isAuthorizedAdmin(adminAddress, adminSecretKey, authHeader)) {
-    res.status(403).json({ error: "Unauthorized: Maintainer/Admin permissions required to moderate reviews" });
+    res.status(403).json({
+      error: "Unauthorized: Maintainer/Admin permissions required to moderate reviews",
+    });
     return;
   }
 
   try {
-    const updatedReview = moderateReview(String(reviewId), String(promptId), action);
+    const updatedReview = await moderateReview(String(reviewId), String(promptId), action);
 
-    console.log(`✓ Maintainer ${adminAddress.slice(0, 8)} performed moderation action '${action}' on review ${reviewId}`);
+    console.log(
+      `✓ Maintainer ${adminAddress.slice(0, 8)} performed moderation action '${action}' on review ${reviewId}`,
+    );
 
     res.status(200).json({
       success: true,
@@ -78,7 +91,7 @@ export default async function handler(req: any, res: any) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to moderate review";
     console.error("Moderation error:", message);
-    if (message.includes("not found")) {
+    if (error instanceof ReviewNotFoundError || message.includes("not found")) {
       res.status(404).json({ error: message });
     } else {
       res.status(500).json({ error: message });

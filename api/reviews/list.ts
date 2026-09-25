@@ -1,8 +1,9 @@
 /**
  * Review List Endpoint
- * 
+ *
  * Returns public reviews for a specific prompt, sorted by most recent first.
  * Filters out hidden reviews and strips internal moderation metadata.
+ * Reads from durable review storage (#179).
  */
 
 import { getPublicReviews } from "../../src/lib/reviews/reviewStore";
@@ -21,13 +22,12 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    // Get public reviews (excludes status === "hidden" and strips moderation metadata)
-    const publicReviews = getPublicReviews(String(promptId));
+    const publicReviews = await getPublicReviews(String(promptId));
 
-    // Calculate stats based on visible reviews
-    const averageRating = publicReviews.length > 0
-      ? publicReviews.reduce((sum, r) => sum + r.rating, 0) / publicReviews.length
-      : 0;
+    const averageRating =
+      publicReviews.length > 0
+        ? publicReviews.reduce((sum, r) => sum + r.rating, 0) / publicReviews.length
+        : 0;
 
     res.status(200).json({
       reviews: publicReviews,
