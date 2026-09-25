@@ -124,3 +124,7 @@ CI runs `yarn check:setup` on pull requests (see `.github/workflows/frontend.yml
 | `Missing keys from .env.example` | Add any keys listed by `yarn check:setup` |
 | `environments.toml not found` | Ensure repo root checkout is complete |
 | Draft/buyer API 500 | Set `MONGODB_URI` in `server/.env` and start MongoDB |
+
+### API adapter consolidation
+
+Dual serverless/Express mounts for versioning and webhooks are documented in [api-adapter-consolidation.md](./api-adapter-consolidation.md). `ADMIN_ROTATION_TOKEN` gates admin webhook access on both adapters.

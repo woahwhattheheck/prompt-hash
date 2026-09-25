@@ -392,3 +392,7 @@ This is critical because PromptHash retries failed deliveries, which may result 
 Webhook endpoints should handle bursts gracefully. We recommend:
 - Return 200 quickly and process asynchronously
 - Use 429 with `Retry-After` header if your system is overloaded
+
+## Adapter consolidation
+
+Serverless and Express adapters for prompt versioning and webhooks share authoritative domain services. See [api-adapter-consolidation.md](./api-adapter-consolidation.md).

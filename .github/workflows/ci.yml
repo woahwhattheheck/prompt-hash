@@ -76,6 +76,12 @@ jobs:
       - name: Frontend tests
         run: yarn test:frontend
 
+      - name: API domain drift guard
+        run: yarn guard:api-domain-drift
+
+      - name: API domain contract tests
+        run: yarn test:api-domain-contract
+
   # ── Express API / server ──────────────────────────────────────────────────
   api:
     name: API (Express / server)

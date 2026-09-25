@@ -18,3 +18,11 @@ jobs:
           else
             echo "No merge conflict markers found."
           fi
+
+  api-domain-drift:
+    name: API domain drift guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard consolidated adapters
+        run: node scripts/guard-api-domain-drift.mjs
