@@ -392,3 +392,22 @@ This is critical because PromptHash retries failed deliveries, which may result 
 Webhook endpoints should handle bursts gracefully. We recommend:
 - Return 200 quickly and process asynchronously
 - Use 429 with `Retry-After` header if your system is overloaded
+
+
+## Seller notifications (#181)
+
+### Get feed
+
+`GET /api/seller-notifications?wallet={address}&advance=1`
+
+Returns the deterministic in-app notification feed for a seller wallet, derived
+from indexed events and the durable wallet cursor. Optional `advance=1` moves the
+cursor to the tip after the read.
+
+### Update read / cursor state
+
+`POST /api/seller-notifications`
+
+Body: `{ "wallet", "action": "mark-read" | "mark-all-read" | "advance", "ids"? }`.
+
+See [seller-notification-cursors.md](./seller-notification-cursors.md).

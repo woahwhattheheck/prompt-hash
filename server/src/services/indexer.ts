@@ -8,6 +8,7 @@ import { enqueueSimilarityScan, startSimilarityWorker } from "./similarityJobQue
 import { indexPromptProjection } from "./promptSearchIndex";
 import { stellarConfig } from "../config/stellar";
 import { cacheDel, cacheDelPattern, CACHE_KEYS } from "./cacheService";
+import { ingestSellerNotificationEvent } from "./sellerNotificationIngest";
 
 const CONTRACT_ID = stellarConfig.PUBLIC_PROMPT_HASH_CONTRACT_ID;
 const rpc = new Server(stellarConfig.PUBLIC_STELLAR_RPC_URL);
@@ -158,6 +159,37 @@ async function processEvent(event: any) {
     default:
       console.log(`Unhandled event topic: ${topic}`);
       break;
+  }
+
+  // Drive in-app seller alerts from indexed events (#181). Best-effort;
+  // failures must not block projection. Email delivery is unchanged.
+  try {
+    if (["PromptPurchased", "PromptPriceUpdated", "PromptSaleStatusUpdated"].includes(String(topic))) {
+      let wallet = data?.creator
+        ? String(data.creator)
+        : data?.seller
+          ? String(data.seller)
+          : "";
+      if (!wallet) {
+        const prompt = await Prompt.findOne({ onChainId: data?.prompt_id?.toString() }).populate("owner");
+        wallet = (prompt as { owner?: { walletAddress?: string } })?.owner?.walletAddress || "";
+      }
+      if (wallet) {
+        await ingestSellerNotificationEvent({
+          ledger: Number(event.ledger || 0),
+          transaction: String(event.txHash || event.transaction || `ledger-${event.ledger}`),
+          eventIndex: Number(event.eventIndex ?? 0),
+          topic: String(topic),
+          wallet,
+          promptId: data?.prompt_id?.toString?.() ?? String(data?.prompt_id ?? ""),
+          buyer: data?.buyer ? String(data.buyer) : undefined,
+          active: typeof data?.active === "boolean" ? data.active : undefined,
+          priceStroops: data?.price_stroops,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[seller-notifications] ingest failed", err);
   }
 
   // Invalidate caches if this event updated a prompt

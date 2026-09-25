@@ -124,3 +124,13 @@ CI runs `yarn check:setup` on pull requests (see `.github/workflows/frontend.yml
 | `Missing keys from .env.example` | Add any keys listed by `yarn check:setup` |
 | `environments.toml not found` | Ensure repo root checkout is complete |
 | Draft/buyer API 500 | Set `MONGODB_URI` in `server/.env` and start MongoDB |
+
+
+### Seller notification cursors (#181)
+
+| Variable | Meaning |
+|----------|---------|
+| `MONGODB_URI` | Prefer Mongo event/cursor collections when set |
+| `SELLER_NOTIFICATION_STORE_PATH` | File-store path when Mongo is unset (default: OS temp) |
+
+See [seller-notification-cursors.md](./seller-notification-cursors.md).

@@ -41,7 +41,7 @@ describe("summariseActivity", () => {
   });
 });
 
-describe("deriveNotifications", () => {
+describe("legacy deriveNotifications (deprecated snapshot path)", () => {
   it("emits nothing on the first load (no previous snapshot)", () => {
     const prompts = [makePrompt({ id: 1n, salesCount: 5 })];
     expect(deriveNotifications(null, prompts, NOW)).toEqual([]);
@@ -87,6 +87,9 @@ describe("mergeNotifications", () => {
     message: "New sale",
     createdAt: NOW,
     read: false,
+    eventId: "legacy:sale:1:1",
+    logicalKey: "sale:1:legacy",
+    ledger: 0,
   };
 
   it("prepends fresh notifications and drops duplicates by id", () => {

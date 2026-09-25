@@ -13,6 +13,7 @@ import searchRouter from "./routes/searchRoutes";
 import { fulfillmentRouter } from "./routes/fulfillmentRoutes";
 import { reconciliationRouter } from "./routes/reconciliationRoutes";
 import { reviewRouter } from "./routes/reviewRoutes";
+import { sellerNotificationRouter } from "./routes/sellerNotificationRoutes";
 import { computeReadiness } from "./services/healthService";
 import {
   globalLimiter,
@@ -79,6 +80,7 @@ app.use("/api/versions", promptContentJsonLimit, versioningRouter);
 app.use("/api/governance", defaultJsonLimit, authLimiter, governanceRouter); // Issue #113
 app.use("/api/search", defaultJsonLimit, searchRouter);
 app.use("/api/fulfillment", defaultJsonLimit, strictLimiter, fulfillmentRouter);
+app.use("/api/seller-notifications", defaultJsonLimit, authLimiter, sellerNotificationRouter);
 app.use("/api/reviews", defaultJsonLimit, reviewRouter);
 
 app.post("/api/test-prompt", defaultJsonLimit, strictLimiter, TestPromptProxy);
