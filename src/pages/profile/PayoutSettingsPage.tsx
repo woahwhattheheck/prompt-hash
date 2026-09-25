@@ -21,6 +21,7 @@ import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { shortenAddress } from "@/lib/utils";
 import { stellarNetwork } from "@/lib/env";
 import { usePageMeta } from "@/lib/seo/usePageMeta";
+import { PayoutStatementsCard } from "@/components/profile/PayoutStatementsCard";
 
 
 
@@ -309,6 +310,8 @@ export default function PayoutSettingsPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <PayoutStatementsCard walletAddress={address} />
 
             <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-5 py-4 text-sm text-cyan-100">
               <div className="flex items-start gap-3">

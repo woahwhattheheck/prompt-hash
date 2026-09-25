@@ -222,6 +222,38 @@ Returns draft and ready-to-publish prompts for the connected creator wallet.
 
 Creates a new version for a prompt owned by the calling wallet.
 
+
+### Seller payout statements (#245)
+
+Fee rate: `DEFAULT_FEE_BPS = 500` from `contracts/prompt-hash/src/contract.rs`
+(mirrored in `server/src/constants/platformFee.ts`). Amounts are integer stroops.
+See `docs/payout-statements.md` for the reconciliation formula.
+
+`GET /api/payouts/statements/:walletAddress`
+
+Lists persisted statements for the creator wallet.
+
+`GET /api/payouts/statements/:walletAddress?from=<ISO>&to=<ISO>`
+
+Live preview reconciliation for an inclusive date range.
+
+`GET /api/payouts/statements/:walletAddress/:statementId`
+
+Fetches one statement.
+
+`GET /api/payouts/statements/:walletAddress/:statementId/export?format=csv|json`
+
+Downloads CSV or JSON.
+
+`POST /api/payouts/statements/generate`
+
+Body: `{ sellerWallet, periodStart, periodEnd, persist?, previousBalanceCarryoverStroops?, priorSettledPeriodEnd?, purchases?, refunds?, payoutAttempts? }`.
+When `purchases` is omitted, aggregates from Mongo (Prompt.price + Purchase + refunded FulfillmentRecord). Payout address comes from `User.payoutSettings`.
+
+`PATCH /api/payouts/statements/:statementId/status`
+
+Body: `{ status: "pending"|"settled"|"failed", failureReason?, payoutTxHash? }`.
+
 ## Account And Auth Flow
 
 ### Challenge token
