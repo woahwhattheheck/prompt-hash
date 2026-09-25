@@ -100,6 +100,7 @@ yarn dev
 | `ADMIN_ROTATION_TOKEN` | Secret rotation admin |
 | `CHALLENGE_TOKEN_SECRET_PREVIOUS` | Rotation grace period |
 | `MONGODB_URI` | `server/` draft & buyer APIs |
+| `PORT` / `HOST` / `SHUTDOWN_TIMEOUT_MS` | `server/` listen + graceful shutdown — see [server-lifecycle.md](./operations/server-lifecycle.md) |
 
 ---
 

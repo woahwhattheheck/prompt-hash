@@ -53,4 +53,20 @@ async function connectDb(): Promise<typeof mongoose> {
   }
 }
 
+/**
+ * Close the mongoose connection pool and clear the module cache.
+ * Safe to call when never connected. Used by graceful shutdown (#171).
+ */
+export async function disconnectDb(): Promise<void> {
+  const readyState = mongoose.connection.readyState;
+  // 0 = disconnected, 99 = uninitialized in some versions — treat as already closed.
+  if (readyState !== 0) {
+    await mongoose.disconnect();
+  }
+  if (cached) {
+    cached.conn = null;
+    cached.promise = null;
+  }
+}
+
 export default connectDb;

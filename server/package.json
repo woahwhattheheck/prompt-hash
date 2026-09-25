@@ -19,7 +19,8 @@
     "reindex": "ts-node scripts/reIndexFromLedger.ts",
     "reindex:dry-run": "ts-node scripts/reIndexFromLedger.ts --dry-run",
     "dedupe-purchases": "ts-node scripts/dedupePurchases.ts",
-    "dedupe-purchases:dry-run": "ts-node scripts/dedupePurchases.ts --dry-run"
+    "dedupe-purchases:dry-run": "ts-node scripts/dedupePurchases.ts --dry-run",
+    "test:server-lifecycle": "jest --testPathPatterns='runtime.test|serverLifecycle.test' --passWithNoTests"
   },
   "files": [
     "build"
@@ -52,7 +53,8 @@
     "nodemailer": "^9.0.3",
     "nodemon": "^3.1.14",
     "redis": "^6.0.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
