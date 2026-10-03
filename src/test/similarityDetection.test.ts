@@ -104,6 +104,27 @@ describe("levenshteinRatio", () => {
   it("handles one empty string", () => {
     expect(levenshteinRatio("", "hello")).toBeCloseTo(0.0);
   });
+
+  it("preserves unequal-length edit scores in both input orders", () => {
+    expect(levenshteinRatio("kitten", "sitting")).toBe(1 - 3 / 7);
+    expect(levenshteinRatio("sitting", "kitten")).toBe(1 - 3 / 7);
+    expect(levenshteinRatio("hello", "")).toBe(0);
+  });
+
+  it("preserves UTF-16 code-unit distance for supplementary characters", () => {
+    expect(levenshteinRatio("a😀b", "a😁b")).toBe(1 - 1 / 4);
+    expect(levenshteinRatio("😀", "a😀b")).toBe(1 - 2 / 4);
+    expect(levenshteinRatio("a😀b", "😀")).toBe(1 - 2 / 4);
+  });
+
+  it("scores a short draft against a long listing without changing routing", () => {
+    const short = "a".repeat(48);
+    const long = "a".repeat(8192);
+    const expected = 1 - (long.length - short.length) / long.length;
+    expect(computeSimilarityScore(short, long)).toBe(expected);
+    expect(computeSimilarityScore(long, short)).toBe(expected);
+    expect(computeSimilarityScore("b".repeat(48), long)).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

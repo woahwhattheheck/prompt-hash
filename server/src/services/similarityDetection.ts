@@ -64,25 +64,32 @@ export function cosineSimilarity(a: Map<string, number>, b: Map<string, number>)
 // ---------------------------------------------------------------------------
 
 export function levenshteinRatio(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
-  );
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  if (a.length === 0 || b.length === 0) return 0;
 
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (a[i - 1] === b[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1];
+  // The score is symmetric. Keep only two rows along the shorter input so
+  // a short draft compared with a long listing does not allocate their product.
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  let previous = Array.from({ length: shorter.length + 1 }, (_, j) => j);
+  let current = new Array<number>(shorter.length + 1);
+
+  for (let i = 1; i <= longer.length; i++) {
+    current[0] = i;
+    for (let j = 1; j <= shorter.length; j++) {
+      if (longer[i - 1] === shorter[j - 1]) {
+        current[j] = previous[j - 1];
       } else {
-        dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+        current[j] = 1 + Math.min(previous[j], current[j - 1], previous[j - 1]);
       }
     }
+    const completed = current;
+    current = previous;
+    previous = completed;
   }
 
-  const distance = dp[m][n];
-  const maxLen = Math.max(m, n);
-  return maxLen === 0 ? 1 : 1 - distance / maxLen;
+  return 1 - previous[shorter.length] / maxLen;
 }
 
 // ---------------------------------------------------------------------------
