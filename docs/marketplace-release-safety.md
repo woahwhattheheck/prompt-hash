@@ -34,6 +34,7 @@ random failures or apparent success unrelated to Stellar ledger state.
 
 ```bash
 npm run guard:marketplace-stochastic
+npm run test:marketplace-guard
 npm run test:marketplace-release-safety
 ```
 
@@ -46,5 +47,18 @@ the demo adapter and its deterministic transaction hashes entirely. The release
 safety suite checks the actual minified marketplace entry (with the Stellar SDK
 external) and preserves the existing deterministic demo/UI cases.
 
-After building, `node scripts/guard-no-stochastic-marketplace.mjs --bundle dist`
-also rejects emitted JavaScript containing reserved `tx_demo_` fixtures.
+Without arguments, the guard checks sources only and remains safe to run before
+a build. After building, run
+`node scripts/guard-no-stochastic-marketplace.mjs --bundle dist` to check emitted
+artifacts, including reserved `tx_demo_` fixtures. The bundle directory may be an
+absolute path or a path relative to the current repository root. An explicit
+`--bundle` requires exactly one directory argument and at least one nonempty
+`.js`, `.mjs`, or `.cjs` file, including nested assets. Missing directories,
+files in place of directories, and output containing only empty JavaScript,
+whitespace, CSS, or source maps fail instead of reporting a clean scan.
+
+`npm run test:marketplace-guard` runs the actual CLI against temporary artifacts
+using only Node's standard library; no dependency install or build is needed.
+It covers invalid arguments and paths, absent JavaScript, valid relative and
+absolute output, and the existing forbidden-content rules. The broader release
+safety command also runs these CLI checks after the marketplace/UI suite.

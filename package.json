@@ -25,7 +25,8 @@
     "prepare": "husky",
     "check:setup": "node scripts/check-local-setup.mjs",
     "guard:marketplace-stochastic": "node scripts/guard-no-stochastic-marketplace.mjs",
-    "test:marketplace-release-safety": "vitest run src/lib/marketplace/marketplaceTx.test.ts src/components/PurchaseProgress.test.tsx && node scripts/guard-no-stochastic-marketplace.mjs"
+    "test:marketplace-guard": "node --test scripts/test-marketplace-guard.mjs",
+    "test:marketplace-release-safety": "vitest run src/lib/marketplace/marketplaceTx.test.ts src/components/PurchaseProgress.test.tsx && node scripts/guard-no-stochastic-marketplace.mjs && npm run test:marketplace-guard"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^1.9.5",
