@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
 import {
-  priceStroopsWithinXlmBounds,
+  xlmBoundToStroops,
   sortPromptsBy,
 } from "@/lib/prompts/promptOrdering";
 
@@ -109,8 +109,13 @@ export function useSearchPrompts(filters: SearchFilters, enabled = true) {
         }
         
         if (minPrice !== undefined || maxPrice !== undefined) {
+          const minStroops =
+            minPrice === undefined ? undefined : xlmBoundToStroops(minPrice);
+          const maxStroops =
+            maxPrice === undefined ? undefined : xlmBoundToStroops(maxPrice);
           filtered = filtered.filter((p) =>
-            priceStroopsWithinXlmBounds(p.priceStroops, minPrice, maxPrice),
+            (minStroops === undefined || p.priceStroops >= minStroops) &&
+            (maxStroops === undefined || p.priceStroops <= maxStroops),
           );
         }
 
@@ -234,3 +239,4 @@ export function useFeaturedPrompts(limit: number = 6) {
     staleTime: 300_000, // Cache for 5 minutes
   });
 }
+
