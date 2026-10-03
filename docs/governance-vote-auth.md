@@ -21,6 +21,10 @@ Vote mutations require a **signed wallet session**:
 Voter identity is taken **only** from the verified session address. Any
 `voterWallet` (or similar) body field is ignored and has no effect.
 
+The expiry timestamp is an exclusive deadline: at `now >= expiresAt`, both
+vote mutations return `401 expired_token` before accessing purchases or votes.
+An otherwise valid session remains usable immediately before that deadline.
+
 ### Network binding
 
 Session claims include `PUBLIC_STELLAR_NETWORK_PASSPHRASE`. A token minted for

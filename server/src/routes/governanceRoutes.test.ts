@@ -261,6 +261,60 @@ describe("DELETE /api/governance/vote/:promptId", () => {
   });
 });
 
+describe.each([
+  { method: "post" as const, action: VOTE_CREATE_ACTION, successStatus: 201 },
+  { method: "delete" as const, action: VOTE_DELETE_ACTION, successStatus: 200 },
+])("$method vote session expiry", ({ method, action, successStatus }) => {
+  it("rejects a signed session at expiry before accessing purchases or votes", async () => {
+    const buyer = Keypair.random();
+    const issued = issueSigned(buyer, action, { now: NOW });
+    mockPurchaseExists.mockResolvedValue(true);
+    mockVoteCreate.mockResolvedValue({});
+    mockVoteDelete.mockResolvedValue({});
+    const clock = jest.spyOn(Date, "now").mockReturnValue(issued.expiresAt);
+
+    try {
+      const res = await request(buildApp())[method](
+        `/api/governance/vote/${PROMPT}`,
+      ).send({ sessionToken: issued.sessionToken, signature: issued.signature });
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("expired_token");
+      expect(mockPurchaseExists).not.toHaveBeenCalled();
+      expect(mockVoteCreate).not.toHaveBeenCalled();
+      expect(mockVoteDelete).not.toHaveBeenCalled();
+      expect(mockVoteCount).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("accepts the authenticated buyer immediately before expiry", async () => {
+    const buyer = Keypair.random();
+    const issued = issueSigned(buyer, action, { now: NOW });
+    mockPurchaseExists.mockResolvedValue(true);
+    mockVoteCreate.mockResolvedValue({});
+    mockVoteDelete.mockResolvedValue({});
+    const clock = jest.spyOn(Date, "now").mockReturnValue(issued.expiresAt - 1);
+
+    try {
+      const res = await request(buildApp())[method](
+        `/api/governance/vote/${PROMPT}`,
+      ).send({ sessionToken: issued.sessionToken, signature: issued.signature });
+
+      expect(res.status).toBe(successStatus);
+      expect(res.body.success).toBe(true);
+      const mutateVote = method === "post" ? mockVoteCreate : mockVoteDelete;
+      expect(mutateVote).toHaveBeenCalledWith({
+        promptId: PROMPT,
+        voterWallet: buyer.publicKey().toLowerCase(),
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
 describe("public aggregate reads", () => {
   it("GET /votes/:promptId does not require a session", async () => {
     mockVoteCount.mockResolvedValue(7);

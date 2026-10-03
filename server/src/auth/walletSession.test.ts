@@ -166,6 +166,48 @@ describe("createWalletSessionToken / verifyWalletSessionToken", () => {
       }),
     ).toThrow(/expired/i);
   });
+
+  it.each([0, 1000])("rejects a token at its expiry with TTL %i ms", (ttlMs) => {
+    const issued = createWalletSessionToken({
+      address: Keypair.random().publicKey(),
+      promptId: PROMPT,
+      action: VOTE_CREATE_ACTION,
+      network: NETWORK,
+      secret: SECRET,
+      now: NOW,
+      ttlMs,
+    });
+
+    expect(() =>
+      verifyWalletSessionToken(issued.sessionToken, {
+        secret: SECRET,
+        now: issued.expiresAt,
+        expectedNetwork: NETWORK,
+      }),
+    ).toThrow(expect.objectContaining({ code: "expired_token" }));
+  });
+
+  it("accepts a token immediately before its expiry", () => {
+    const buyer = Keypair.random();
+    const issued = createWalletSessionToken({
+      address: buyer.publicKey(),
+      promptId: PROMPT,
+      action: VOTE_CREATE_ACTION,
+      network: NETWORK,
+      secret: SECRET,
+      now: NOW,
+      ttlMs: 1000,
+    });
+
+    const claims = verifyWalletSessionToken(issued.sessionToken, {
+      secret: SECRET,
+      now: issued.expiresAt - 1,
+      expectedPromptId: PROMPT,
+      expectedAction: VOTE_CREATE_ACTION,
+      expectedNetwork: NETWORK,
+    });
+    expect(claims.address).toBe(buyer.publicKey());
+  });
 });
 
 describe("authenticateVoteSession", () => {

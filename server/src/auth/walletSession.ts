@@ -267,7 +267,7 @@ export function verifyWalletSessionToken(
     throw new WalletSessionError("invalid_token", "Invalid session token.");
   }
 
-  if (claims.exp < now) {
+  if (claims.exp <= now) {
     throw new WalletSessionError("expired_token", "Session expired.");
   }
 
