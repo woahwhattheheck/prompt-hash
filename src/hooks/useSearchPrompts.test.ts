@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
-import { useSearchPrompts } from "./useSearchPrompts";
+import { useFeaturedPrompts, useSearchPrompts } from "./useSearchPrompts";
 
 const { getAllPrompts, useQuery } = vi.hoisted(() => ({
   getAllPrompts: vi.fn(),
@@ -107,4 +107,90 @@ describe("search fallback price bounds", () => {
       expect(parsing).toHaveBeenCalledTimes(2);
     }
   });
+});
+
+describe.each(["search", "featured"] as const)(
+  "%s API price conversion",
+  (kind) => {
+    it.each([
+      [2.01, 20_100_000n],
+      [4.02, 40_200_000n],
+      ["2.01", 20_100_000n],
+      ["0", 0n],
+      [0, 0n],
+      [1.5, 15_000_000n],
+      [1.2345678, 12_345_678n],
+      [1_000_000_000.25, 10_000_000_002_500_000n],
+      [undefined, 0n],
+    ])(
+      "preserves the exact stroop value of %j XLM",
+      async (price, expected) => {
+        const apiPrompt = {
+          onChainId: "9007199254740993",
+          price,
+          title: "Indexed prompt",
+          category: "Writing",
+          content: "Preview",
+          owner: { walletAddress: "GCREATOR" },
+          isActive: true,
+        };
+        vi.mocked(fetch).mockResolvedValueOnce({
+          ok: true,
+          json: async () =>
+            kind === "search"
+              ? {
+                  prompts: [apiPrompt],
+                  total: 1,
+                  page: 1,
+                  totalPages: 1,
+                  hasMore: false,
+                }
+              : [apiPrompt],
+        } as Response);
+
+        if (kind === "search") useSearchPrompts({});
+        else useFeaturedPrompts();
+        const [{ queryFn }] = useQuery.mock.calls.at(-1)!;
+        const result = await queryFn();
+        const prompts = kind === "search" ? result.prompts : result;
+
+        expect(prompts).toHaveLength(1);
+        expect(prompts[0].id).toBe(9_007_199_254_740_993n);
+        expect(prompts[0].priceStroops).toBe(expected);
+        expect(getAllPrompts).not.toHaveBeenCalled();
+      },
+    );
+  },
+);
+
+it("keeps a successful indexed price within equal inclusive XLM bounds", async () => {
+  vi.mocked(fetch).mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({
+      prompts: [
+        {
+          onChainId: "1",
+          price: 2.01,
+          title: "Exact boundary",
+          category: "Writing",
+          content: "Preview",
+          isActive: true,
+        },
+      ],
+      total: 1,
+      page: 1,
+      totalPages: 1,
+      hasMore: false,
+    }),
+  } as Response);
+
+  const result = await search({ minPrice: 2.01, maxPrice: 2.01 });
+  expect(result.prompts[0].priceStroops).toBe(20_100_000n);
+  expect(result).toMatchObject({
+    total: 1,
+    page: 1,
+    totalPages: 1,
+    hasMore: false,
+  });
+  expect(getAllPrompts).not.toHaveBeenCalled();
 });
