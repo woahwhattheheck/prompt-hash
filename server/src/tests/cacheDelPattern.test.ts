@@ -167,13 +167,77 @@ describe("cacheDelPattern SCAN invalidation", () => {
       code: "CACHE_TIMEOUT",
     });
     expect(client.destroy).toHaveBeenCalledTimes(1);
-    expect(__lastInvalidationMetricsForTests()?.failures).toBeGreaterThanOrEqual(1);
+    expect(__lastInvalidationMetricsForTests()?.failures).toBe(1);
+    expect(console.info).toHaveBeenCalledTimes(1);
 
     // Unrelated reads after the cooldown recover with a fresh client.
     jest.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
     const recovered = redisClient({ get: jest.fn().mockResolvedValue("ok") });
     createClient.mockReturnValue(recovered);
     await expect(cacheRead("unrelated")).resolves.toEqual({ status: "hit", value: "ok" });
+  });
+
+  it("counts a stalled delete once and reports the delete operation", async () => {
+    jest.useFakeTimers();
+    const client = redisClient({
+      scan: jest.fn().mockResolvedValue({
+        cursor: "9",
+        keys: ["prompts:list:a"],
+      }),
+      del: jest.fn(() => new Promise<number>(() => undefined)),
+    });
+    createClient.mockReturnValue(client);
+
+    const done = cacheDelPattern("prompts:list:*");
+    await jest.advanceTimersByTimeAsync(251);
+    await done;
+
+    expect(__lastInvalidationMetricsForTests()).toMatchObject({
+      scannedKeys: 1,
+      deletedKeys: 0,
+      scanBatches: 1,
+      failures: 1,
+    });
+    expect(console.warn).toHaveBeenCalledWith("[cache] unavailable", {
+      operation: "delete",
+      status: "unavailable",
+      code: "CACHE_TIMEOUT",
+    });
+    expect(client.scan).toHaveBeenCalledTimes(1);
+    expect(client.del).toHaveBeenCalledTimes(1);
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+    expect(console.info).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a later scan failure after a completed delete", async () => {
+    const client = redisClient({
+      scan: jest
+        .fn()
+        .mockResolvedValueOnce({ cursor: "9", keys: ["prompts:list:a"] })
+        .mockRejectedValueOnce(
+          Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+        ),
+      del: jest.fn().mockResolvedValue(1),
+    });
+    createClient.mockReturnValue(client);
+
+    await cacheDelPattern("prompts:list:*");
+
+    expect(console.warn).toHaveBeenCalledWith("[cache] unavailable", {
+      operation: "scan",
+      status: "unavailable",
+      code: "ECONNRESET",
+    });
+    expect(__lastInvalidationMetricsForTests()).toMatchObject({
+      scannedKeys: 1,
+      deletedKeys: 1,
+      scanBatches: 1,
+      failures: 1,
+    });
+    expect(client.scan).toHaveBeenCalledTimes(2);
+    expect(client.del).toHaveBeenCalledTimes(1);
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+    expect(console.info).toHaveBeenCalledTimes(1);
   });
 
   it("keeps concurrent writes readable via generation fencing during invalidation", async () => {
@@ -242,6 +306,13 @@ describe("cacheDelPattern SCAN invalidation", () => {
 
     await cacheDelPattern("prompts:list:*");
     expect(createClient).not.toHaveBeenCalled();
+    expect(console.info).toHaveBeenCalledTimes(1);
+    expect(__lastInvalidationMetricsForTests()).toMatchObject({
+      scannedKeys: 0,
+      deletedKeys: 0,
+      scanBatches: 0,
+      failures: 0,
+    });
 
     process.env.REDIS_URL = "redis://fixture";
     createClient.mockReturnValue(client);

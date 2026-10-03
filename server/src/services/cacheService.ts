@@ -226,16 +226,14 @@ export async function cacheDelPattern(pattern: string): Promise<void> {
   };
 
   let activeClient: RedisClientType | null = null;
+  let operation: CacheOperation = "scan";
   try {
     activeClient = await getClient();
-    if (!activeClient) {
-      metrics.durationMs = Date.now() - started;
-      reportInvalidation(metrics);
-      return;
-    }
+    if (!activeClient) return;
 
     let cursor: string = "0";
     do {
+      operation = "scan";
       const reply = await withTimeout(
         activeClient.scan(cursor, { MATCH: pattern, COUNT: SCAN_BATCH_SIZE }),
       );
@@ -251,13 +249,15 @@ export async function cacheDelPattern(pattern: string): Promise<void> {
       for (let offset = 0; offset < keys.length; offset += DELETE_BATCH_SIZE) {
         const chunk = keys.slice(offset, offset + DELETE_BATCH_SIZE);
         try {
+          operation = "delete";
           const removed = await withTimeout(activeClient.del(chunk));
-          metrics.deletedKeys += typeof removed === "number" ? removed : chunk.length;
+          metrics.deletedKeys +=
+            typeof removed === "number" ? removed : chunk.length;
         } catch (error) {
+          if (error instanceof CacheTimeoutError) throw error;
           metrics.failures += 1;
           // Soft-fail a single delete batch so remaining SCAN hops can proceed;
           // hard client death is handled by the outer catch after destroy.
-          if (error instanceof CacheTimeoutError) throw error;
           console.warn("[cache] invalidate batch failed", {
             pattern,
             batchSize: chunk.length,
@@ -268,7 +268,7 @@ export async function cacheDelPattern(pattern: string): Promise<void> {
     } while (!cursorIsDone(cursor));
   } catch (error) {
     metrics.failures += 1;
-    if (activeClient) invalidate(activeClient, "scan", error);
+    if (activeClient) invalidate(activeClient, operation, error);
   } finally {
     metrics.durationMs = Date.now() - started;
     reportInvalidation(metrics);
