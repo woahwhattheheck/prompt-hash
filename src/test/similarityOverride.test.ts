@@ -162,6 +162,35 @@ describe("authenticated similarity override route", () => {
     expectNoWrite();
   });
 
+  it("rejects a credential at its exact expiry before prompt or appeal lookup", async () => {
+    const expiresAt = fixedDate.getTime();
+    const credential = token({ now: expiresAt - 1000, ttlMs: 1000 });
+    vi.spyOn(Date, "now").mockReturnValue(expiresAt);
+
+    const response = await post({ ...body, appealId: appealObjectId }, credential);
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe("expired_token");
+    expect(promptFind).not.toHaveBeenCalled();
+    expect(appealFind).not.toHaveBeenCalled();
+    expectNoWrite();
+  });
+
+  it("allows an audited override immediately before the credential expires", async () => {
+    const expiresAt = fixedDate.getTime();
+    const credential = token({ now: expiresAt - 1000, ttlMs: 1000 });
+    vi.spyOn(Date, "now").mockReturnValue(expiresAt - 1);
+
+    const response = await post(body, credential);
+
+    expect(response.status).toBe(200);
+    expect(response.body.override.actorAddress).toBe(actor);
+    expect(prompt.similarityFlag).toBe("clean");
+    expect(prompt.similarityOverrides).toHaveLength(1);
+    expect(promptWrite).toHaveBeenCalledTimes(1);
+    expect(appealWrite).not.toHaveBeenCalled();
+  });
+
   it("rejects a revoked verified credential", async () => {
     const credential = token({ jti: "revoked-local-test" });
     revokeAdminPrincipalToken("revoked-local-test");
