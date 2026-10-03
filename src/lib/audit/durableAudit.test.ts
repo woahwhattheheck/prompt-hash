@@ -136,31 +136,54 @@ describe("accept-before-complete", () => {
     expect(queue.getMetrics().acceptFailures).toBe(1);
   });
 
-  it("fails closed on store outage", async () => {
-    const failing: OutboxStore = {
+  it.each(["findByDeliveryKey", "countOpen", "insert"] as const)(
+    "fails closed on a %s store outage",
+    async (operation) => {
+      const failing: OutboxStore = {
+        ...store,
+        async [operation]() {
+          throw new Error("DB down");
+        },
+      };
+      const q = new DurableAuditQueue(failing);
+
+      await expect(
+        q.accept({
+          action: "unlock_success",
+          result: "success",
+          promptId: "1",
+          requestId: "req-db",
+        }),
+      ).rejects.toMatchObject({ code: "AUDIT_ACCEPT_FAILED" });
+
+      expect(q.getMetrics().acceptFailures).toBe(1);
+    },
+  );
+
+  it("accepts and deduplicates a request after a read outage recovers", async () => {
+    let available = false;
+    const recovering: OutboxStore = {
       ...store,
-      async insert() {
-        throw new Error("DB down");
-      },
-      async findByDeliveryKey() {
-        return null;
-      },
-      async countOpen() {
-        return 0;
+      async findByDeliveryKey(key) {
+        if (!available) throw new Error("temporary read outage");
+        return store.findByDeliveryKey(key);
       },
     };
-    const q = new DurableAuditQueue(failing);
+    const q = new DurableAuditQueue(recovering);
+    const input = {
+      action: "unlock_success" as const,
+      result: "success" as const,
+      promptId: "42",
+      requestId: "read-recovery",
+    };
 
-    await expect(
-      q.accept({
-        action: "unlock_success",
-        result: "success",
-        promptId: "1",
-        requestId: "req-db",
-      }),
-    ).rejects.toMatchObject({ code: "AUDIT_ACCEPT_FAILED" });
-
-    expect(q.getMetrics().acceptFailures).toBe(1);
+    await expect(q.accept(input)).rejects.toBeInstanceOf(AuditAcceptError);
+    available = true;
+    const accepted = await q.accept(input);
+    expect(accepted.duplicate).toBe(false);
+    expect((await store.getById(accepted.acceptanceId))?.status).toBe("accepted");
+    expect(await q.accept(input)).toEqual({ ...accepted, duplicate: true });
+    expect(q.getMetrics()).toMatchObject({ accepted: 1, acceptFailures: 1 });
   });
 });
 
@@ -256,6 +279,31 @@ describe("drain / crash recovery / DLQ", () => {
 });
 
 describe("degraded policy adapter", () => {
+  it.each(["findByDeliveryKey", "countOpen", "insert"] as const)(
+    "honors explicit degraded mode on a %s outage",
+    async (operation) => {
+      const store: OutboxStore = {
+        ...createInMemoryOutboxStore(),
+        async [operation]() {
+          throw new Error("DB down");
+        },
+      };
+      const queue = new DurableAuditQueue(store);
+      const result = await acceptCriticalOrThrow(
+        queue,
+        { action: "unlock_success", result: "success", requestId: "read-outage" },
+        true,
+      );
+
+      expect(result).toEqual({ acceptanceId: null, duplicate: false, degraded: true });
+      expect(queue.getMetrics()).toMatchObject({
+        accepted: 0,
+        acceptFailures: 1,
+        degraded: 1,
+      });
+    },
+  );
+
   it("returns degraded=true instead of throwing when opted in", async () => {
     const store = createInMemoryOutboxStore();
     const queue = new DurableAuditQueue(store, { maxBacklog: 0 });

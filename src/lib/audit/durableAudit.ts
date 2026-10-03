@@ -254,25 +254,25 @@ export class DurableAuditQueue {
     const payload = redactAcceptInput(input);
     const deliveryKey = buildDeliveryKey(payload);
 
-    const existing = await this.store.findByDeliveryKey(deliveryKey);
-    if (existing) {
-      return { acceptanceId: existing.acceptanceId, duplicate: true };
-    }
-
-    const open = await this.store.countOpen();
-    if (open >= this.options.maxBacklog) {
-      this.metrics.dropped += 1;
-      this.metrics.acceptFailures += 1;
-      throw new AuditAcceptError(
-        "Audit accept failed; sensitive action must not complete.",
-        "backlog_saturated",
-      );
-    }
-
-    const now = (this.options.now ?? Date.now)();
-    const acceptanceId = (this.options.idFactory ?? randomUUID)();
-
     try {
+      const existing = await this.store.findByDeliveryKey(deliveryKey);
+      if (existing) {
+        return { acceptanceId: existing.acceptanceId, duplicate: true };
+      }
+
+      const open = await this.store.countOpen();
+      if (open >= this.options.maxBacklog) {
+        this.metrics.dropped += 1;
+        this.metrics.acceptFailures += 1;
+        throw new AuditAcceptError(
+          "Audit accept failed; sensitive action must not complete.",
+          "backlog_saturated",
+        );
+      }
+
+      const now = (this.options.now ?? Date.now)();
+      const acceptanceId = (this.options.idFactory ?? randomUUID)();
+
       const inserted = await this.store.insert({
         acceptanceId,
         deliveryKey,
