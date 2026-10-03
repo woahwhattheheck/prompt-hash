@@ -59,7 +59,11 @@ function status(ledger: number, active: boolean, tx = `tx-status-${ledger}`) {
   });
 }
 
-function price(ledger: number, priceStroops: string, tx = `tx-price-${ledger}`) {
+function price(
+  ledger: number,
+  priceStroops: string,
+  tx = `tx-price-${ledger}`,
+) {
   return makeSellerEvent({
     network: "testnet",
     contract: "CPROMPT",
@@ -81,11 +85,18 @@ afterEach(async () => {
 
 describe("reconcileEvents / deterministic feed", () => {
   it("backfill from a cursor produces the same feed deterministically", () => {
-    const events = [sale(10), sale(11, "tx-b"), status(12, false), price(13, "2000")];
+    const events = [
+      sale(10),
+      sale(11, "tx-b"),
+      status(12, false),
+      price(13, "2000"),
+    ];
     const cursor = emptyCursor(WALLET);
     const a = buildFeedFromCursor(events, cursor);
     const b = backfillFromCursor(events, cursor);
-    expect(a.notifications.map((n) => n.id)).toEqual(b.notifications.map((n) => n.id));
+    expect(a.notifications.map((n) => n.id)).toEqual(
+      b.notifications.map((n) => n.id),
+    );
     expect(a.notifications.map((n) => n.id)).toEqual(
       buildFeedFromCursor(events, cursor).notifications.map((n) => n.id),
     );
@@ -197,7 +208,10 @@ describe("reorg / correction", () => {
     };
     const reconciled = reconcileEvents([original, correction]);
     expect(reconciled.map((e) => e.eventId)).toEqual([correction.eventId]);
-    const feed = buildFeedFromCursor([original, correction], emptyCursor(WALLET));
+    const feed = buildFeedFromCursor(
+      [original, correction],
+      emptyCursor(WALLET),
+    );
     expect(feed.notifications).toHaveLength(1);
     expect(feed.notifications[0].eventId).toBe(correction.eventId);
   });
@@ -322,6 +336,125 @@ describe("file-backed durability (restart)", () => {
 
     await resetSellerNotificationStore();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("file-backed format validation", () => {
+  const event = sale(50);
+  const cursor = {
+    ...emptyCursor(WALLET),
+    cursorEventId: event.eventId,
+    lastLedger: event.ledger,
+    readIds: [`notif:${event.eventId}`],
+  };
+  const valid = {
+    events: { [event.eventId]: event },
+    cursors: { [cursor.wallet]: cursor },
+  };
+
+  it.each<[string, unknown]>([
+    ["array envelope", [event]],
+    ["null envelope", null],
+    ["number envelope", 0],
+    ["string envelope", "store"],
+    ["boolean envelope", true],
+    ["array events", { ...valid, events: [event] }],
+    ["primitive events", { ...valid, events: 3 }],
+    ["array cursors", { ...valid, cursors: [cursor] }],
+    ["primitive cursors", { ...valid, cursors: false }],
+  ])(
+    "preserves a rejected %s and recovers after restoration",
+    async (_label, shape) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
+      const filePath = path.join(dir, "store.json");
+      try {
+        const before = JSON.stringify(shape, null, 2);
+        fs.writeFileSync(filePath, before);
+        const repo = createFileSellerNotificationRepository(filePath);
+        const nextEvent = sale(51);
+        const nextCursor = {
+          ...cursor,
+          cursorEventId: nextEvent.eventId,
+          lastLedger: nextEvent.ledger,
+          readIds: [...cursor.readIds, `notif:${nextEvent.eventId}`],
+        };
+
+        await expect(repo.getEvent(event.eventId)).rejects.toThrow(
+          "Invalid seller notification store",
+        );
+        await expect(repo.listEventsForWallet(WALLET)).rejects.toThrow(
+          "Invalid seller notification store",
+        );
+        await expect(repo.getCursor(WALLET)).rejects.toThrow(
+          "Invalid seller notification store",
+        );
+        await expect(repo.countEvents()).rejects.toThrow(
+          "Invalid seller notification store",
+        );
+        await expect(repo.appendEvent(nextEvent)).rejects.toThrow(
+          "Invalid seller notification store",
+        );
+        await expect(repo.saveCursor(nextCursor)).rejects.toThrow(
+          "Invalid seller notification store",
+        );
+        expect(fs.readFileSync(filePath, "utf8")).toBe(before);
+        expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
+
+        fs.writeFileSync(filePath, JSON.stringify(valid));
+        expect(await repo.getEvent(event.eventId)).toEqual(event);
+        expect(await repo.getCursor(WALLET)).toEqual(cursor);
+        expect((await repo.appendEvent(nextEvent)).created).toBe(true);
+        await repo.saveCursor(nextCursor);
+
+        const reloaded = createFileSellerNotificationRepository(filePath);
+        expect(await reloaded.listEventsForWallet(WALLET)).toEqual([
+          event,
+          nextEvent,
+        ]);
+        expect(await reloaded.getCursor(WALLET)).toEqual(nextCursor);
+        expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["missing sections", {}],
+    ["null sections", { events: null, cursors: null }],
+  ])("retains compatibility with %s", async (_label, shape) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
+    const filePath = path.join(dir, "store.json");
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(shape));
+      const repo = createFileSellerNotificationRepository(filePath);
+      expect(await repo.countEvents()).toBe(0);
+      expect((await repo.getCursor(WALLET)).readIds).toEqual([]);
+      await repo.appendEvent(event);
+      await repo.saveCursor(cursor);
+
+      const reloaded = createFileSellerNotificationRepository(filePath);
+      expect(await reloaded.getEvent(event.eventId)).toEqual(event);
+      expect(await reloaded.getCursor(WALLET)).toEqual(cursor);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows an explicit clear of an incompatible store", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
+    const filePath = path.join(dir, "store.json");
+    try {
+      fs.writeFileSync(filePath, JSON.stringify([event]));
+      const repo = createFileSellerNotificationRepository(filePath);
+      await repo.clear();
+      expect(await repo.countEvents()).toBe(0);
+      expect(await repo.listEventsForWallet(WALLET)).toEqual([]);
+      expect((await repo.getCursor(WALLET)).readIds).toEqual([]);
+      expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

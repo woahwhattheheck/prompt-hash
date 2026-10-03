@@ -18,6 +18,10 @@ function emptyShape(): FileShape {
   return { events: {}, cursors: {} };
 }
 
+function isDictionary(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 async function withLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
   // The lock is created before the store, so initialize its directory first.
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
@@ -55,6 +59,13 @@ function readShape(filePath: string): FileShape {
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as FileShape;
+    if (
+      !isDictionary(parsed) ||
+      (parsed.events != null && !isDictionary(parsed.events)) ||
+      (parsed.cursors != null && !isDictionary(parsed.cursors))
+    ) {
+      throw new Error("Invalid seller notification store");
+    }
     return {
       events: parsed.events ?? {},
       cursors: parsed.cursors ?? {},

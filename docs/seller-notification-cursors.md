@@ -12,13 +12,13 @@ sales-count correction could lose or duplicate alerts.
 
 ## Model
 
-| Piece | Role |
-|-------|------|
-| Indexed seller event | Append-only row for `PromptPurchased`, `PromptSaleStatusUpdated`, `PromptPriceUpdated` |
-| Event id | `network:contract:ledger:tx:eventIndex:schema` (same scheme as `indexerPipeline.eventId`) |
-| Notification id | `notif:{eventId}` — stable across devices |
-| Wallet cursor | `cursorEventId`, `lastLedger`, `readIds[]` — durable, server-side |
-| Reorg / correction | Newer event with the same `logicalKey` (or `correctionOf`) supersedes the prior row |
+| Piece                | Role                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| Indexed seller event | Append-only row for `PromptPurchased`, `PromptSaleStatusUpdated`, `PromptPriceUpdated`    |
+| Event id             | `network:contract:ledger:tx:eventIndex:schema` (same scheme as `indexerPipeline.eventId`) |
+| Notification id      | `notif:{eventId}` — stable across devices                                                 |
+| Wallet cursor        | `cursorEventId`, `lastLedger`, `readIds[]` — durable, server-side                         |
+| Reorg / correction   | Newer event with the same `logicalKey` (or `correctionOf`) supersedes the prior row       |
 
 ## API
 
@@ -35,10 +35,16 @@ to the tip of the reconciled log.
 
 ## Backends
 
-| Backend | When |
-|---------|------|
-| Mongo (`SellerNotificationEvent` + `SellerNotificationCursor`) | `MONGODB_URI` set |
-| File store | otherwise / tests (`SELLER_NOTIFICATION_STORE_PATH`) |
+| Backend                                                        | When                                                 |
+| -------------------------------------------------------------- | ---------------------------------------------------- |
+| Mongo (`SellerNotificationEvent` + `SellerNotificationCursor`) | `MONGODB_URI` set                                    |
+| File store                                                     | otherwise / tests (`SELLER_NOTIFICATION_STORE_PATH`) |
+
+The file store expects a JSON object with `events` and `cursors` dictionaries.
+Missing or `null` sections retain their empty-dictionary defaults. Arrays and
+other incompatible containers are rejected before reads or updates can silently
+discard events or read state; the original file bytes remain intact. Restore a
+compatible file to resume use, or explicitly clear the repository to reset it.
 
 ## Guarantees
 
@@ -59,4 +65,5 @@ npm run test:seller-notif-cursors
 ```
 
 Covers missed polls, storage clearing / cursor recovery, two devices, duplicate
-events, reorg/correction, and file-store restart.
+events, reorg/correction, file-store restart, incompatible-file preservation,
+and recovery after restoring a compatible file.
