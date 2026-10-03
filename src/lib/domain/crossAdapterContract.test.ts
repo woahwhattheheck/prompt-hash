@@ -3,6 +3,7 @@
  */
 
 import { createHmac } from "node:crypto";
+import { Keypair } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getBuyerVersion,
@@ -23,7 +24,10 @@ import * as adapterAuth from "./adapterAuth";
 function makeVersionDeps(
   overrides: Partial<PromptVersioningDeps> = {},
 ): PromptVersioningDeps {
-  const purchases = new Map<string, { versionIndex: number; createdAt: Date }>();
+  const purchases = new Map<
+    string,
+    { versionIndex: number; createdAt: Date }
+  >();
   const versions = new Map<
     string,
     { versionIndex: number; content: string; changeNote: string }
@@ -41,8 +45,16 @@ function makeVersionDeps(
     currentVersionIndex: 2,
     owner: "u1",
   });
-  versions.set("p1:1", { versionIndex: 1, content: "v1-body", changeNote: "n1" });
-  versions.set("p1:2", { versionIndex: 2, content: "v2-body", changeNote: "n2" });
+  versions.set("p1:1", {
+    versionIndex: 1,
+    content: "v1-body",
+    changeNote: "n1",
+  });
+  versions.set("p1:2", {
+    versionIndex: 2,
+    content: "v2-body",
+    changeNote: "n2",
+  });
   purchases.set("p1:gbuyer", {
     versionIndex: 2,
     createdAt: new Date("2026-01-01T00:00:00Z"),
@@ -132,6 +144,24 @@ function makeWebhookDeps(
     generateSecret: () => "secret-fixed",
   };
   return { ...base, ...overrides };
+}
+
+function callWebhookContract(
+  adapter: "domain" | "HTTP dispatcher",
+  deps: WebhookDomainDeps,
+  input: Parameters<typeof handleWebhookHttp>[1],
+) {
+  if (adapter === "HTTP dispatcher") return handleWebhookHttp(deps, input);
+  switch (input.method) {
+    case "GET":
+      return getWebhookSubscription(deps, input);
+    case "POST":
+      return registerWebhookSubscription(deps, input);
+    case "DELETE":
+      return deleteWebhookSubscription(deps, input);
+    default:
+      throw new Error("Unsupported contract fixture method");
+  }
 }
 
 describe("prompt versioning contract", () => {
@@ -242,6 +272,110 @@ describe("webhook contract", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ["domain", "uppercase"],
+    ["domain", "lowercase"],
+    ["HTTP dispatcher", "uppercase"],
+    ["HTTP dispatcher", "lowercase"],
+  ] as const)(
+    "%s accepts a real signed owner with %s address input",
+    async (adapter, casing) => {
+      const owner = Keypair.random();
+      const publicKey = owner.publicKey();
+      const normalized = publicKey.toLowerCase();
+      const timestamp = Date.now();
+      const message = "prompt-hash webhooks:" + normalized + ":" + timestamp;
+      const signedMessage = owner
+        .sign(Buffer.from(message, "utf8"))
+        .toString("base64");
+      const fields = {
+        walletAddress: casing === "uppercase" ? publicKey : normalized,
+        timestamp,
+        signedMessage,
+      };
+      const deps = makeWebhookDeps({ adminToken: "" });
+
+      const registered = await callWebhookContract(adapter, deps, {
+        method: "POST",
+        body: { ...fields, url: "https://example.com/hook" },
+      });
+      expect(registered.status).toBe(201);
+      expect(registered.body).toMatchObject({ secret: "secret-fixed" });
+      expect((await deps.findByWallet(normalized))?.walletAddress).toBe(
+        normalized,
+      );
+
+      const got = await callWebhookContract(adapter, deps, {
+        method: "GET",
+        query: fields,
+      });
+      expect(got.status).toBe(200);
+      expect(got.body).toMatchObject({ walletAddress: normalized });
+      expect(got.body).not.toHaveProperty("secret");
+
+      const deleted = await callWebhookContract(adapter, deps, {
+        method: "DELETE",
+        body: fields,
+      });
+      expect(deleted.status).toBe(200);
+      expect(await deps.findByWallet(normalized)).toBeNull();
+    },
+  );
+
+  it.each(["domain", "HTTP dispatcher"] as const)(
+    "%s rejects wrong-key, tampered, missing and malformed owner proofs",
+    async (adapter) => {
+      const owner = Keypair.random();
+      const otherOwner = Keypair.random();
+      const walletAddress = owner.publicKey();
+      const timestamp = Date.now();
+      const message =
+        "prompt-hash webhooks:" + walletAddress.toLowerCase() + ":" + timestamp;
+      const fields = {
+        walletAddress,
+        timestamp,
+        signedMessage: owner
+          .sign(Buffer.from(message, "utf8"))
+          .toString("base64"),
+      };
+      const invalidProofs = [
+        {
+          ...fields,
+          signedMessage: otherOwner
+            .sign(Buffer.from(message, "utf8"))
+            .toString("base64"),
+        },
+        { ...fields, timestamp: timestamp + 1 },
+        { ...fields, signedMessage: "" },
+        { ...fields, walletAddress: "not-a-stellar-key" },
+      ];
+      const deps = makeWebhookDeps({ adminToken: "" });
+      const find = vi.spyOn(deps, "findByWallet");
+      const findPublic = vi.spyOn(deps, "findByWalletPublic");
+      const create = vi.spyOn(deps, "createSubscription");
+      const remove = vi.spyOn(deps, "deleteByWallet");
+
+      for (const proof of invalidProofs) {
+        for (const method of ["GET", "POST", "DELETE"] as const) {
+          const result = await callWebhookContract(adapter, deps, {
+            method,
+            query: proof,
+            body: { ...proof, url: "https://example.com/hook" },
+          });
+          expect(result.status).toBe(401);
+          expect(result.body).toEqual({
+            error: "Unauthorized: signed ownership proof required.",
+          });
+        }
+      }
+
+      expect(find).not.toHaveBeenCalled();
+      expect(findPublic).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects register without signed owner", async () => {
     vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue(null);
     vi.spyOn(adapterAuth, "isAdminRequest").mockReturnValue(false);
@@ -255,13 +389,17 @@ describe("webhook contract", () => {
   });
 
   it("registers and gets with signed owner (parity)", async () => {
-    vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue("gowner");
+    vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue(
+      "gowner",
+    );
     vi.spyOn(adapterAuth, "isAdminRequest").mockReturnValue(false);
-    vi.spyOn(adapterAuth, "mergeAuthFields").mockImplementation((body, query) => ({
-      walletAddress: body?.walletAddress ?? query?.walletAddress,
-      signedMessage: body?.signedMessage ?? query?.signedMessage,
-      timestamp: body?.timestamp ?? query?.timestamp,
-    }));
+    vi.spyOn(adapterAuth, "mergeAuthFields").mockImplementation(
+      (body, query) => ({
+        walletAddress: body?.walletAddress ?? query?.walletAddress,
+        signedMessage: body?.signedMessage ?? query?.signedMessage,
+        timestamp: body?.timestamp ?? query?.timestamp,
+      }),
+    );
 
     const deps = makeWebhookDeps();
     const registered = await registerWebhookSubscription(deps, {
@@ -354,7 +492,9 @@ describe("webhook contract", () => {
   );
 
   it("blocks invalid destination URLs", async () => {
-    vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue("gowner");
+    vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue(
+      "gowner",
+    );
     vi.spyOn(adapterAuth, "isAdminRequest").mockReturnValue(false);
     const result = await registerWebhookSubscription(
       makeWebhookDeps({
@@ -376,7 +516,9 @@ describe("webhook contract", () => {
   });
 
   it("deletes with signed owner", async () => {
-    vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue("gowner");
+    vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue(
+      "gowner",
+    );
     vi.spyOn(adapterAuth, "isAdminRequest").mockReturnValue(false);
     const deps = makeWebhookDeps();
     await registerWebhookSubscription(deps, {

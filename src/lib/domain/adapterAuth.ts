@@ -20,7 +20,9 @@ function headerValue(headers: AuthHeaders | undefined, name: string): string {
   const lower = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() === lower) {
-      return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+      return Array.isArray(value)
+        ? String(value[0] ?? "")
+        : String(value ?? "");
     }
   }
   return "";
@@ -64,7 +66,14 @@ export function validateSignedWebhookOwner(
   }
   const expected = `prompt-hash webhooks:${addr}:${timestamp}`;
   try {
-    if (verifyChallengeSignature(addr, expected, String(signedMessage))) {
+    // Stellar StrKeys require uppercase; the stored owner and message stay normalized.
+    if (
+      verifyChallengeSignature(
+        addr.toUpperCase(),
+        expected,
+        String(signedMessage),
+      )
+    ) {
       return addr;
     }
   } catch {
