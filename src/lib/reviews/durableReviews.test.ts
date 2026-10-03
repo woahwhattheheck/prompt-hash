@@ -8,6 +8,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
+import Review from "../../../server/src/models/Review";
+import {
+  createMongoReviewRepository,
+  type MongoReviewModel,
+} from "./mongoReviewRepository";
 import {
   createFileReviewRepository,
   configureReviewRepository,
@@ -22,9 +27,90 @@ import {
 import {
   DuplicateReportError,
   DuplicateReviewError,
+  ReviewNotFoundError,
   type StoredReview,
 } from "./reviewTypes";
 import type { ReviewRepository } from "./reviewRepository";
+
+/** Exercise the real model's query casting without opening a database connection. */
+function mongoCastingRepository(
+  row: Awaited<ReturnType<MongoReviewModel["create"]>> | null,
+) {
+  const filters: Record<string, unknown>[] = [];
+  const model: Pick<MongoReviewModel, "findOne" | "findOneAndUpdate"> = {
+    findOne(filter) {
+      return {
+        async lean() {
+          filters.push(Review.findOne(filter).cast(Review));
+          return row;
+        },
+      };
+    },
+    async findOneAndUpdate(filter, update, options) {
+      filters.push(Review.findOneAndUpdate(filter, update, options).cast(Review));
+      return row;
+    },
+  };
+  return { repo: createMongoReviewRepository(model as MongoReviewModel), filters };
+}
+
+describe("Mongo review identifier casting", () => {
+  it("retrieves, reports and moderates public review IDs without casting them as ObjectIds", async () => {
+    const review = new Review({
+      reviewId: "review_1791011700000_abc1234",
+      promptId: "42",
+      userAddress: "gbuyer",
+      rating: 5,
+    }).toObject();
+    const { repo, filters } = mongoCastingRepository(review);
+
+    expect((await repo.getById(review.reviewId, "42"))?.id).toBe(review.reviewId);
+    expect((await repo.getById(review.reviewId))?.id).toBe(review.reviewId);
+    expect((await repo.reportReview(review.reviewId, "42", "GREPORTER", "Spam links")).id)
+      .toBe(review.reviewId);
+    expect((await repo.moderateReview(review.reviewId, "42", "hide")).id).toBe(review.reviewId);
+
+    expect(filters).toEqual([
+      { reviewId: review.reviewId, promptId: "42" },
+      { reviewId: review.reviewId },
+      {
+        reviewId: review.reviewId,
+        promptId: "42",
+        "reports.reporterAddress": { $ne: "greporter" },
+      },
+      { reviewId: review.reviewId, promptId: "42" },
+    ]);
+  });
+
+  it("retains legacy ObjectId lookup and prompt scope for reads and mutations", async () => {
+    const review = new Review({ promptId: "42", userAddress: "gbuyer", rating: 4 }).toObject();
+    const reviewId = review._id.toString();
+    const { repo, filters } = mongoCastingRepository(review);
+
+    expect((await repo.getById(reviewId))?.id).toBe(reviewId);
+    expect((await repo.reportReview(reviewId, "42", "GREPORTER", "Spam links")).id).toBe(reviewId);
+    expect((await repo.moderateReview(reviewId, "42", "hide")).id).toBe(reviewId);
+
+    expect(filters.map((filter) => filter.promptId)).toEqual([undefined, "42", "42"]);
+    for (const filter of filters) {
+      expect(filter.$or).toEqual([{ reviewId }, { _id: review._id }]);
+    }
+  });
+
+  it.each(["review_missing", "123456789012", "z".repeat(24)])(
+    "returns normal not-found outcomes for an unmatched string ID: %s",
+    async (reviewId) => {
+      const { repo, filters } = mongoCastingRepository(null);
+
+      expect(await repo.getById(reviewId, "42")).toBeNull();
+      await expect(repo.reportReview(reviewId, "42", "GREPORTER", "Spam links"))
+        .rejects.toBeInstanceOf(ReviewNotFoundError);
+      await expect(repo.moderateReview(reviewId, "42", "hide"))
+        .rejects.toBeInstanceOf(ReviewNotFoundError);
+      expect(filters.every((filter) => filter.promptId === "42")).toBe(true);
+    },
+  );
+});
 
 async function tempStorePath(label: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `ph-reviews-${label}-`));

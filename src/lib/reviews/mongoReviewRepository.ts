@@ -84,11 +84,16 @@ export interface MongoReviewModel {
   countDocuments(filter?: Record<string, unknown>): Promise<number>;
 }
 
+function reviewIdFilter(reviewId: string): Record<string, unknown> {
+  // Public IDs are strings; only legacy ObjectIds can enter the _id branch.
+  // Mongoose casts every $or branch, even when reviewId would match a row.
+  return /^[a-f\d]{24}$/i.test(reviewId)
+    ? { $or: [{ reviewId }, { _id: reviewId }] }
+    : { reviewId };
+}
+
 function idFilter(reviewId: string, promptId: string): Record<string, unknown> {
-  return {
-    promptId: String(promptId),
-    $or: [{ reviewId }, { _id: reviewId }],
-  };
+  return { promptId: String(promptId), ...reviewIdFilter(reviewId) };
 }
 
 export function createMongoReviewRepository(Review: MongoReviewModel): ReviewRepository {
@@ -176,9 +181,7 @@ export function createMongoReviewRepository(Review: MongoReviewModel): ReviewRep
     },
 
     async getById(reviewId, promptId) {
-      const filter: Record<string, unknown> = {
-        $or: [{ reviewId }, { _id: reviewId }],
-      };
+      const filter = reviewIdFilter(reviewId);
       if (promptId !== undefined) filter.promptId = String(promptId);
       const row = await Review.findOne(filter).lean();
       return row ? toStored(row) : null;
