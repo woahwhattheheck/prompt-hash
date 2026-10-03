@@ -10,11 +10,11 @@ Issue: [#246](https://github.com/Prompt-Hash-Stellar/prompt-hash/issues/246)
 Consumer-facing **lifecycle** names map to the real Soroban events defined in
 `contracts/prompt-hash/src/events.rs`:
 
-| Lifecycle | Contract event   | Meaning                                      |
-|-----------|------------------|----------------------------------------------|
-| `publish` | `PromptCreated`  | Listing published / created on-chain         |
-| `purchase`| `PromptPurchased`| Buyer purchased a license                    |
-| `unlock`  | `EscrowReleased` | Escrow funds released (post-dispute unlock)  |
+| Lifecycle  | Contract event    | Meaning                                     |
+| ---------- | ----------------- | ------------------------------------------- |
+| `publish`  | `PromptCreated`   | Listing published / created on-chain        |
+| `purchase` | `PromptPurchased` | Buyer purchased a license                   |
+| `unlock`   | `EscrowReleased`  | Escrow funds released (post-dispute unlock) |
 
 There is **no** `PromptUnlocked` event in the current contract. Unlock
 consumers must subscribe to `EscrowReleased`.
@@ -24,11 +24,11 @@ consumers must subscribe to `EscrowReleased`.
 Event **schema versions** live on the consumer envelope (fixtures / indexer
 input), not as a field inside every Soroban topic today. Supported versions:
 
-| Version | Status    | Notes |
-|---------|-----------|-------|
-| `1`     | Supported | Exact field set from `events.rs` for publish / purchase / unlock |
+| Version | Status    | Notes                                                                                             |
+| ------- | --------- | ------------------------------------------------------------------------------------------------- |
+| `1`     | Supported | Exact field set from `events.rs` for publish / purchase / unlock                                  |
 | `2`     | Supported | Additive optional fields only (`content_hash`, `metadata_uri`, `license_id`, `release_reason`, …) |
-| other   | Rejected  | Routed to the dead-letter queue (DLQ) — never crashes the consumer |
+| other   | Rejected  | Routed to the dead-letter queue (DLQ) — never crashes the consumer                                |
 
 ### Upgrade steps (adding schema `N+1`)
 
@@ -62,17 +62,19 @@ input), not as a field inside every Soroban topic today. Supported versions:
 
 Decoder entrypoint: `decodeEvent()` in `server/src/services/eventDecoder.ts`.
 
-| Reason                     | When                                              | Action |
-|----------------------------|---------------------------------------------------|--------|
-| `UNSUPPORTED_VERSION`      | `schemaVersion` not in supported set              | Hold; ship decoder support or backfill rewrite |
+| Reason                     | When                                              | Action                                                              |
+| -------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
+| `UNSUPPORTED_VERSION`      | `schemaVersion` not in supported set              | Hold; ship decoder support or backfill rewrite                      |
 | `UNKNOWN_EVENT_TYPE`       | lifecycle / contract event not mapped             | Confirm event name against `events.rs`; ignore noise or add mapping |
-| `SCHEMA_VALIDATION_FAILED` | Supported version but missing required fields     | Inspect producer / RPC decoding bugs |
-| `CORRUPT_PAYLOAD`          | Envelope not an object / bad `schemaVersion` type | Drop or repair upstream serialization |
+| `SCHEMA_VALIDATION_FAILED` | Supported version but missing required fields     | Inspect producer / RPC decoding bugs                                |
+| `CORRUPT_PAYLOAD`          | Envelope not an object / bad `schemaVersion` type | Drop or repair upstream serialization                               |
 
 In-process sink: `InMemoryEventDeadLetter` + `routeToDeadLetter()` in
-`server/src/services/eventDeadLetter.ts`. The sink never throws into the
-indexer loop. Persist to durable storage later by implementing
-`EventDeadLetterSink`.
+`server/src/services/eventDeadLetter.ts`. The routing helper logs synchronous
+sink errors and rejected persistence promises without interrupting the indexer
+loop. Routing still returns immediately; it does not confirm durable storage
+completion or retry a failed write. Persist to durable storage later by
+implementing `EventDeadLetterSink`.
 
 ## Fixtures & tests
 

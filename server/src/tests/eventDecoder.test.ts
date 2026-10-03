@@ -65,8 +65,12 @@ describe("supported event fixtures decode deterministically", () => {
         if (!result.ok) return;
 
         expect(result.event.lifecycle).toBe(fixture.expected?.lifecycle);
-        expect(result.event.contractEvent).toBe(fixture.expected?.contractEvent);
-        expect(result.event.schemaVersion).toBe(fixture.expected?.schemaVersion);
+        expect(result.event.contractEvent).toBe(
+          fixture.expected?.contractEvent,
+        );
+        expect(result.event.schemaVersion).toBe(
+          fixture.expected?.schemaVersion,
+        );
         expect(result.event.promptId).toBe(fixture.expected?.promptId);
         expect(result.event.fields).toEqual(fixture.expected?.fields);
       });
@@ -89,7 +93,9 @@ describe("supported event fixtures decode deterministically", () => {
     for (const name of manifest.fixtures.supported) {
       expect(fs.existsSync(path.join(FIXTURES_DIR, name))).toBe(true);
     }
-    expect(manifest.fixtures.supported.sort()).toEqual([...SUPPORTED_FIXTURES].sort());
+    expect(manifest.fixtures.supported.sort()).toEqual(
+      [...SUPPORTED_FIXTURES].sort(),
+    );
   });
 });
 
@@ -156,6 +162,68 @@ describe("unsupported versions fail safely (dead-letter)", () => {
     expect(sink.size()).toBe(1);
     expect(sink.byReason("UNSUPPORTED_VERSION")).toHaveLength(1);
     expect(sink.list()[0].raw.schemaVersion).toBe(99);
+  });
+
+  it.each(["synchronous", "asynchronous"])(
+    "logs a %s sink failure without interrupting the consumer",
+    async (mode) => {
+      const result = decodeEvent(loadFixture("unsupported.schema_v99.json"), {
+        now: fixedNow,
+      });
+      if (result.ok) throw new Error("Expected unsupported event");
+
+      const sink = new InMemoryEventDeadLetter();
+      const failure = new Error("storage offline");
+      const push = jest.spyOn(sink, "push").mockImplementation(() => {
+        if (mode === "synchronous") throw failure;
+        return Promise.reject(failure);
+      });
+      const log = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      try {
+        expect(routeToDeadLetter(result.deadLetter, sink)).toBeUndefined();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(push).toHaveBeenCalledTimes(1);
+        expect(push.mock.calls[0][0]).toBe(result.deadLetter);
+        expect(log).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(
+          "[event-dlq] failed to persist dead-letter record",
+          failure,
+        );
+      } finally {
+        push.mockRestore();
+        log.mockRestore();
+      }
+    },
+  );
+
+  it("routes to an asynchronous sink without logging a successful write", async () => {
+    const result = decodeEvent(loadFixture("unsupported.schema_v99.json"), {
+      now: fixedNow,
+    });
+    if (result.ok) throw new Error("Expected unsupported event");
+
+    const sink = new InMemoryEventDeadLetter();
+    const store = sink.push.bind(sink);
+    const push = jest.spyOn(sink, "push").mockImplementation(async (record) => {
+      store(record);
+    });
+    const log = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    try {
+      expect(routeToDeadLetter(result.deadLetter, sink)).toBeUndefined();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(sink.list()).toEqual([result.deadLetter]);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      push.mockRestore();
+      log.mockRestore();
+    }
   });
 
   it("corrupt envelope (non-number schemaVersion) dead-letters as CORRUPT_PAYLOAD", () => {

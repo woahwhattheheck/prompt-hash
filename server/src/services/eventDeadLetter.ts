@@ -58,7 +58,9 @@ export function routeToDeadLetter(
   sink: EventDeadLetterSink = defaultEventDeadLetter,
 ): void {
   try {
-    void sink.push(record);
+    void Promise.resolve(sink.push(record)).catch((err: unknown) => {
+      console.error("[event-dlq] failed to persist dead-letter record", err);
+    });
   } catch (err) {
     // Last-resort: never let DLQ plumbing crash the consumer.
     console.error("[event-dlq] failed to persist dead-letter record", err);
