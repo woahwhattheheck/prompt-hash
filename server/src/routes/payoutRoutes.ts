@@ -6,6 +6,7 @@ import { Router, Request, Response } from "express";
 import PayoutStatementModel from "../models/PayoutStatement";
 import {
   PayoutStatementAmountError,
+  PayoutStatementPeriodError,
   aggregateSellerStatementFromDb,
   exportStatementToCsv,
   exportStatementToJson,
@@ -52,7 +53,12 @@ payoutRouter.get(
       res.json({ statements });
     } catch (err) {
       res
-        .status(err instanceof PayoutStatementAmountError ? 400 : 500)
+        .status(
+          err instanceof PayoutStatementAmountError ||
+            err instanceof PayoutStatementPeriodError
+            ? 400
+            : 500,
+        )
         .json({ error: (err as Error).message });
     }
   },
@@ -188,7 +194,12 @@ payoutRouter.post("/statements/generate", async (req: Request, res: Response) =>
     res.status(201).json({ statement });
   } catch (err) {
     res
-      .status(err instanceof PayoutStatementAmountError ? 400 : 500)
+      .status(
+        err instanceof PayoutStatementAmountError ||
+          err instanceof PayoutStatementPeriodError
+          ? 400
+          : 500,
+      )
       .json({ error: (err as Error).message });
   }
 });

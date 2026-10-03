@@ -37,6 +37,34 @@ export class PayoutStatementAmountError extends RangeError {
   }
 }
 
+export class PayoutStatementPeriodError extends RangeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PayoutStatementPeriodError";
+  }
+}
+
+function validatePayoutPeriod(periodStart: unknown, periodEnd: unknown): void {
+  if (typeof periodStart !== "string" || typeof periodEnd !== "string") {
+    throw new PayoutStatementPeriodError(
+      "periodStart and periodEnd must be timestamp or date strings",
+    );
+  }
+
+  const start = Date.parse(periodStart);
+  const end = Date.parse(periodEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    throw new PayoutStatementPeriodError(
+      "periodStart and periodEnd must be valid timestamps or dates",
+    );
+  }
+  if (start > end) {
+    throw new PayoutStatementPeriodError(
+      "periodStart must be before or equal to periodEnd",
+    );
+  }
+}
+
 function safeStroops(value: number, field: string, allowNegative = false): number {
   if (!Number.isSafeInteger(value) || (!allowNegative && value < 0)) {
     throw new PayoutStatementAmountError(
@@ -168,6 +196,7 @@ export function deriveStatementStatus(
 export function reconcilePayoutStatement(
   input: ReconcilePayoutInput,
 ): PayoutStatement {
+  validatePayoutPeriod(input.period?.start, input.period?.end);
   const feeBps = input.feeBps ?? DEFAULT_FEE_BPS;
   const period = input.period;
   statementFeeStroops(0, feeBps);
@@ -381,6 +410,7 @@ export interface AggregateFromDbOptions {
 export async function aggregateSellerStatementFromDb(
   options: AggregateFromDbOptions,
 ): Promise<PayoutStatement> {
+  validatePayoutPeriod(options.periodStart, options.periodEnd);
   const previousBalanceCarryoverStroops = safeStroops(
     options.previousBalanceCarryoverStroops === undefined
       ? 0

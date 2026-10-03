@@ -60,6 +60,23 @@ payableStroops                    = max(netSettlementStroops, 0)
 closingBalanceCarryoverStroops    = min(netSettlementStroops, 0)
 ```
 
+### Period validation
+
+Both period boundaries must be strings that `Date.parse` can resolve to finite
+instants, with `start <= end`. Reconciliation validates the complete period
+before filtering any events, including when purchases and refunds are empty.
+Database aggregation applies the same check before reading seller or prompt
+records. Invalid or reversed periods return HTTP 400 from generation and live
+preview, without signing or persisting a statement.
+
+Equal instants remain valid for the inclusive interval. Boundaries with timezone
+offsets are ordered by their parsed instants, and date-only values retain their
+existing UTC-midnight interpretation. The original boundary strings remain in
+the signed statement and exports. A date-only end does not automatically expand
+to the end of that day; the profile period picker performs its existing explicit
+end-of-day conversion. This guard preserves the existing parser's accepted
+formats and does not change per-event timestamp or prior-settlement handling.
+
 ### Same-period refund
 
 A purchase and its refund both fall in the period. Seller debit equals the
@@ -114,3 +131,45 @@ Frontend:
 ```bash
 npx vitest run src/components/profile/PayoutStatementsCard.test.tsx
 ```
+
+### Period boundary verification
+
+The period-validation continuation was exercised through the actual Express
+router, reconciliation, fee calculation, and signing code on Node 24.19.0 with
+Express 5.2.1. Seventeen HTTP requests ran against the preceding source and the
+repair. Mongo model boundaries were recorded stubs with an empty seller catalog;
+the persistence call was observed, without writing to a live database.
+
+| Requests                                                                                                                                                                                                        | Preceding behavior                        | Repaired behavior                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
+| Six invalid generation requests: empty invalid bounds, reversed bounds with a purchase, an invalid end hidden by an earlier purchase, a non-string bound, an invalid DB-backed period, and an out-of-range date | Signed HTTP 201; persistence called       | HTTP 400; no signature, model reads, or persistence              |
+| Two invalid/reversed live previews                                                                                                                                                                              | Signed HTTP 200 after seller/prompt reads | HTTP 400 before model reads                                      |
+| One invalid start with a purchase                                                                                                                                                                               | HTTP 500                                  | HTTP 400                                                         |
+| Six valid controls: equal instants, equivalent offsets, date-only bounds, ordinary populated/empty periods, and ordered offsets                                                                                 | Signed HTTP 201                           | Same statuses, periods, sale counts, and 950/0-stroop net totals |
+| Two existing required-field/carryover rejection controls                                                                                                                                                        | HTTP 400                                  | HTTP 400                                                         |
+
+The finite-date and ordering guard does not depend on finding an event in the
+period. These observations establish the mounted route behavior and the call
+boundary before database access; they do not establish native Mongo persistence,
+on-chain settlement, full-server startup, or a new frontend run. Package manifests
+and lockfiles are unchanged.
+
+The maintained backend command is:
+
+```bash
+cd server
+npm test -- --testPathPatterns=payoutStatement --runInBand --no-cache
+```
+
+It passes 80 tests: the 54 existing cases plus 23 period-rejection regressions
+and three valid inclusive-boundary controls. Applying the same extended test file
+to the preceding implementation produces 23 failures and 57 passes. Retained
+Jest 30.2.0, ts-jest 29.4.12, and Supertest 7.2.2 were used; the existing model
+mocks remain the database boundary.
+
+ESLint 10.8.1 passes over the service, routes, and test file. The strict
+TypeScript 6.0.3 check follows their imports and exits 2 with five TS2307
+diagnostics because Mongoose is unavailable in the retained runtime. The same
+production check on the exact preceding source yields identical diagnostics;
+the final three-file check adds none. This is a dependency limitation, not a
+claim of a complete type-check or repository build.

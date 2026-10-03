@@ -22,6 +22,8 @@ import request from "supertest";
 import PayoutStatementModel from "../models/PayoutStatement";
 import User from "../models/User";
 import Prompt from "../models/Prompt";
+import Purchase from "../models/Purchase";
+import FulfillmentRecord from "../models/FulfillmentRecord";
 import { payoutRouter } from "../routes/payoutRoutes";
 
 import {
@@ -34,6 +36,7 @@ import {
   exportStatementToCsv,
   exportStatementToJson,
   isWithinPeriod,
+  PayoutStatementPeriodError,
   reconcilePayoutStatement,
 } from "../services/payoutStatementService";
 import type {
@@ -51,6 +54,25 @@ function fee(gross: number): number {
 function sellerNet(gross: number): number {
   return gross - fee(gross);
 }
+
+const invalidStatementPeriods: Array<[string, unknown, unknown]> = [
+  ["malformed start", "not-a-date", "2026-01-31T23:59:59.999Z"],
+  ["malformed end", "2026-01-01T00:00:00.000Z", "not-a-date"],
+  ["reversed bounds", "2026-02-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+  ["numeric start", 1767225600000, "2026-01-31T23:59:59.999Z"],
+  ["array end", "2026-01-01T00:00:00.000Z", ["2026-01-31T23:59:59.999Z"]],
+  ["object start", { toString: null }, "2026-01-31T23:59:59.999Z"],
+  [
+    "out-of-range start",
+    "-271821-04-19T00:00:00.000Z",
+    "2026-01-31T23:59:59.999Z",
+  ],
+  [
+    "out-of-range end",
+    "2026-01-01T00:00:00.000Z",
+    "+275760-09-14T00:00:00.000Z",
+  ],
+];
 
 describe("statement amount boundaries", () => {
   const period = {
@@ -200,6 +222,61 @@ describe("statement amount boundaries", () => {
       expect(findUser).not.toHaveBeenCalled();
       expect(findPrompts).not.toHaveBeenCalled();
     });
+
+    function expectNoStatementIo(): void {
+      expect(persist).not.toHaveBeenCalled();
+      expect(findUser).not.toHaveBeenCalled();
+      expect(findPrompts).not.toHaveBeenCalled();
+      expect(Purchase.find).not.toHaveBeenCalled();
+      expect(Purchase.findOne).not.toHaveBeenCalled();
+      expect(FulfillmentRecord.find).not.toHaveBeenCalled();
+    }
+
+    it.each(invalidStatementPeriods)(
+      "rejects %s before reads or persistence in both generation modes",
+      async (_name, periodStart, periodEnd) => {
+        findUser.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+        findPrompts.mockReturnValue({
+          select: () => ({ lean: jest.fn().mockResolvedValue([]) }),
+        });
+        for (const events of [{ purchases: [], refunds: [] }, {}]) {
+          const res = await request(app)
+            .post("/api/payouts/statements/generate")
+            .send({
+              sellerWallet: payload.sellerWallet,
+              periodStart,
+              periodEnd,
+              ...events,
+            });
+          expect(res.status).toBe(400);
+          expect(res.body.error).toMatch(/periodStart|periodEnd/);
+          expect(res.body.statement).toBeUndefined();
+          expectNoStatementIo();
+        }
+      },
+    );
+
+    it.each(
+      invalidStatementPeriods.filter(
+        ([, start, end]) =>
+          typeof start === "string" && typeof end === "string",
+      ),
+    )(
+      "rejects %s in a preview before database reads",
+      async (_name, from, to) => {
+        findUser.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+        findPrompts.mockReturnValue({
+          select: () => ({ lean: jest.fn().mockResolvedValue([]) }),
+        });
+        const res = await request(app)
+          .get("/api/payouts/statements/GSELLER")
+          .query({ from, to });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/periodStart|periodEnd/);
+        expect(res.body.statement).toBeUndefined();
+        expectNoStatementIo();
+      },
+    );
 
     it("persists a numeric carryover as the exact numeric net", async () => {
       const res = await request(app).post("/api/payouts/statements/generate").send({
@@ -608,6 +685,101 @@ describe("refund AFTER a settled payout (clawback)", () => {
 });
 
 describe("partial periods (date-range boundaries)", () => {
+  it.each(invalidStatementPeriods)(
+    "rejects %s even when no purchase or refund can trigger date parsing",
+    (_name, start, end) => {
+      expect(() =>
+        reconcilePayoutStatement({
+          sellerWallet: "GSELLER",
+          period: { start: start as string, end: end as string },
+          purchases: [],
+          refunds: [],
+        }),
+      ).toThrow(PayoutStatementPeriodError);
+    },
+  );
+
+  it.each([
+    ["reversed bounds", "2026-01-01T00:00:00.000Z"],
+    ["a malformed end after all events predate the start", "not-a-date"],
+  ])("rejects %s instead of silently discarding real events", (_name, end) => {
+    expect(() =>
+      reconcilePayoutStatement({
+        sellerWallet: "GSELLER",
+        period: { start: "2026-02-01T00:00:00.000Z", end },
+        purchases: [
+          {
+            purchaseId: "p1",
+            promptId: "1",
+            buyerWallet: "gbuyer",
+            grossStroops: 1000,
+            purchasedAt: "2026-01-15T00:00:00.000Z",
+          },
+        ],
+        refunds: [
+          {
+            purchaseId: "p1",
+            promptId: "1",
+            originalGrossStroops: 1000,
+            originalPurchasedAt: "2026-01-15T00:00:00.000Z",
+            refundedAt: "2026-01-16T00:00:00.000Z",
+          },
+        ],
+      }),
+    ).toThrow(PayoutStatementPeriodError);
+  });
+
+  it.each([
+    ["equal instants", "2026-01-10T00:00:00.000Z", "2026-01-10T00:00:00.000Z"],
+    ["date-only bounds", "2026-01-10", "2026-01-11"],
+    [
+      "timezone offsets whose text order differs from their instant order",
+      "2026-01-10T02:00:00.000+02:00",
+      "2026-01-10T00:30:00.000Z",
+    ],
+  ])(
+    "preserves inclusive purchases and refunds for %s",
+    (_name, start, end) => {
+      const period = { start, end };
+      const events = [
+        { id: "before", at: new Date(Date.parse(start) - 1).toISOString() },
+        { id: "start", at: new Date(start).toISOString() },
+        { id: "end", at: new Date(end).toISOString() },
+        { id: "after", at: new Date(Date.parse(end) + 1).toISOString() },
+      ];
+      const statement = reconcilePayoutStatement({
+        sellerWallet: "GSELLER",
+        period,
+        purchases: events.map(({ id, at }) => ({
+          purchaseId: id,
+          promptId: "1",
+          buyerWallet: "gbuyer",
+          grossStroops: 1000,
+          purchasedAt: at,
+        })),
+        refunds: events.map(({ id, at }) => ({
+          purchaseId: `refund_${id}`,
+          promptId: "1",
+          originalGrossStroops: 100,
+          originalPurchasedAt: "2026-01-01T00:00:00.000Z",
+          refundedAt: at,
+        })),
+      });
+      expect(statement.period).toEqual(period);
+      expect(statement.sales.map(({ purchaseId }) => purchaseId)).toEqual([
+        "start",
+        "end",
+      ]);
+      expect(statement.refunds.map(({ purchaseId }) => purchaseId)).toEqual([
+        "refund_start",
+        "refund_end",
+      ]);
+      expect(statement.saleCount).toBe(2);
+      expect(statement.grossStroops).toBe(2000);
+      expect(statement.signature).toMatch(/^sha256=[a-f0-9]{64}$/);
+    },
+  );
+
   it("includes events on inclusive start and end boundaries", () => {
     expect(
       isWithinPeriod(
