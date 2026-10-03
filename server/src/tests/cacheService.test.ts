@@ -6,6 +6,7 @@ jest.mock("redis", () => ({
 
 import {
   __resetCacheForTests,
+  cacheDel,
   cacheDelPattern,
   cacheGetOrLoad,
   cacheRead,
@@ -177,5 +178,98 @@ describe("cache reliability", () => {
 
     await expect(cacheGetOrLoad("list", loader)).resolves.toEqual([{ id: 2 }]);
     expect(loader).not.toHaveBeenCalled();
+  });
+
+  it("keeps a replacement load shared after an invalidated exact-key load settles", async () => {
+    const client = redisClient();
+    createClient.mockReturnValue(client);
+    const key = "prompts:detail:17";
+    const stale = deferred<number>();
+    const fresh = deferred<number>();
+    const freshLoader = jest.fn(() => fresh.promise);
+
+    const first = cacheGetOrLoad(key, () => stale.promise);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await cacheDel(key);
+    const second = cacheGetOrLoad(key, freshLoader);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    stale.resolve(1);
+    await expect(first).resolves.toBe(1);
+    const third = cacheGetOrLoad(key, freshLoader);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(freshLoader).toHaveBeenCalledTimes(1);
+
+    fresh.resolve(2);
+    await expect(Promise.all([second, third])).resolves.toEqual([2, 2]);
+    expect(client.set).toHaveBeenCalledTimes(1);
+    expect(client.set).toHaveBeenCalledWith(key, "2", { EX: 60 });
+  });
+
+  it("keeps older pattern-invalidated loads fenced after the newest load completes", async () => {
+    const client = redisClient();
+    createClient.mockReturnValue(client);
+    const firstValue = deferred<number>();
+    const secondValue = deferred<number>();
+    const thirdValue = deferred<number>();
+    const unrelatedValue = deferred<number>();
+    const unrelatedLoader = jest.fn(() => unrelatedValue.promise);
+    const key = "prompts:list:all";
+
+    const first = cacheGetOrLoad(key, () => firstValue.promise);
+    const unrelated = cacheGetOrLoad("prompts:detail:17", unrelatedLoader);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await cacheDelPattern("prompts:list:*");
+    const second = cacheGetOrLoad(key, () => secondValue.promise);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await cacheDelPattern("prompts:list:*");
+    const third = cacheGetOrLoad(key, () => thirdValue.promise);
+    const unrelatedAgain = cacheGetOrLoad("prompts:detail:17", unrelatedLoader);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(unrelatedLoader).toHaveBeenCalledTimes(1);
+
+    thirdValue.resolve(3);
+    await expect(third).resolves.toBe(3);
+    secondValue.resolve(2);
+    firstValue.resolve(1);
+    unrelatedValue.resolve(4);
+    await expect(Promise.all([first, second, unrelated, unrelatedAgain]))
+      .resolves.toEqual([1, 2, 4, 4]);
+    expect(client.set).toHaveBeenCalledTimes(2);
+    expect(client.set).toHaveBeenCalledWith(key, "3", { EX: 60 });
+    expect(client.set).toHaveBeenCalledWith("prompts:detail:17", "4", { EX: 60 });
+  });
+
+  it.each(["key", "pattern"])("fences synchronous %s invalidation inside the loader", async (kind) => {
+    const client = redisClient();
+    createClient.mockReturnValue(client);
+    const key = "prompts:list:all";
+    let invalidation: Promise<void> | undefined;
+    const result = cacheGetOrLoad(key, () => {
+      invalidation = kind === "key" ? cacheDel(key) : cacheDelPattern("prompts:list:*");
+      return Promise.resolve(1);
+    });
+
+    await expect(result).resolves.toBe(1);
+    await invalidation;
+    expect(client.set).not.toHaveBeenCalled();
+  });
+
+  it("releases rejected shared loads so the next caller can retry", async () => {
+    const client = redisClient();
+    createClient.mockReturnValue(client);
+    const failedValue = deferred<number>();
+    const loader = jest.fn(() => failedValue.promise);
+    const first = cacheGetOrLoad("prompts:detail:17", loader);
+    const second = cacheGetOrLoad("prompts:detail:17", loader);
+    const settled = Promise.allSettled([first, second]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(loader).toHaveBeenCalledTimes(1);
+    failedValue.reject(new Error("source unavailable"));
+    expect((await settled).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+
+    await expect(cacheGetOrLoad("prompts:detail:17", () => Promise.resolve(2))).resolves.toBe(2);
+    expect(client.set).toHaveBeenCalledTimes(1);
+    expect(client.set).toHaveBeenCalledWith("prompts:detail:17", "2", { EX: 60 });
   });
 });

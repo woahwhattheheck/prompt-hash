@@ -19,12 +19,9 @@ let initializingClient: RedisClientType | null = null;
 let unavailableUntil = 0;
 let lifecycleVersion = 0;
 
-type InFlightLoad = { generation: number; promise: Promise<unknown> };
+type InFlightLoad = { invalidated: boolean; promise: Promise<unknown> };
 
 const inFlightLoads = new Map<string, InFlightLoad>();
-const keyInvalidationVersions = new Map<string, number>();
-const patternInvalidationVersions = new Map<string, number>();
-let invalidationVersion = 0;
 let lastInvalidationMetrics: CacheInvalidationMetrics | null = null;
 
 const DEFAULT_TTL = 60;
@@ -69,27 +66,20 @@ function reportInvalidation(metrics: CacheInvalidationMetrics): void {
   });
 }
 
-function matchesPattern(key: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  const expression = escaped.replace(/\*/g, ".*");
-  return new RegExp(`^${expression}$`).test(key);
-}
-
-function generationFor(key: string): number {
-  let generation = keyInvalidationVersions.get(key) ?? 0;
-  for (const [pattern, version] of patternInvalidationVersions) {
-    if (version > generation && matchesPattern(key, pattern)) generation = version;
-  }
-  return generation;
-}
-
 function invalidateKeys(keys: string[]): void {
-  const version = ++invalidationVersion;
-  for (const key of keys) keyInvalidationVersions.set(key, version);
+  for (const key of keys) {
+    const load = inFlightLoads.get(key);
+    if (load) load.invalidated = true;
+  }
 }
 
 function invalidatePattern(pattern: string): void {
-  patternInvalidationVersions.set(pattern, ++invalidationVersion);
+  if (!inFlightLoads.size) return;
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  const expression = new RegExp(`^${escaped.replace(/\*/g, ".*")}$`);
+  for (const [key, load] of inFlightLoads) {
+    if (expression.test(key)) load.invalidated = true;
+  }
 }
 
 function cursorIsDone(cursor: string | number): boolean {
@@ -289,23 +279,28 @@ export async function cacheGetOrLoad<T>(
     }
   }
 
-  const generation = generationFor(key);
   const existing = inFlightLoads.get(key);
-  if (existing?.generation === generation) return existing.promise as Promise<T>;
+  if (existing && !existing.invalidated) return existing.promise as Promise<T>;
 
-  const load = loader()
-    .then(async (value) => {
-      if (generationFor(key) === generation) {
-        await cacheSet(key, JSON.stringify(value), ttlSeconds);
-      }
-      return value;
-    })
-    .finally(() => {
-      if (inFlightLoads.get(key)?.promise === load) inFlightLoads.delete(key);
-    });
+  // Each pending load keeps its own fence after a newer load replaces it.
+  // Register before calling the loader, which may invalidate synchronously.
+  const load: InFlightLoad = {
+    invalidated: false,
+    promise: Promise.resolve()
+      .then(loader)
+      .then(async (value) => {
+        if (!load.invalidated) {
+          await cacheSet(key, JSON.stringify(value), ttlSeconds);
+        }
+        return value;
+      })
+      .finally(() => {
+        if (inFlightLoads.get(key) === load) inFlightLoads.delete(key);
+      }),
+  };
 
-  inFlightLoads.set(key, { generation, promise: load });
-  return load;
+  inFlightLoads.set(key, load);
+  return load.promise as Promise<T>;
 }
 
 export const CACHE_KEYS = {
@@ -332,9 +327,7 @@ export function __resetCacheForTests(): void {
   initializingClient = null;
   initialization = null;
   unavailableUntil = 0;
+  for (const load of inFlightLoads.values()) load.invalidated = true;
   inFlightLoads.clear();
-  keyInvalidationVersions.clear();
-  patternInvalidationVersions.clear();
-  invalidationVersion = 0;
   lastInvalidationMetrics = null;
 }
