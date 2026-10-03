@@ -47,8 +47,11 @@ are **never** written to the log.
 
 Delivery failures persist an `errorCode` from the closed set above plus a short
 `lastError`. HTTP statuses become `HTTP <n>`. Timeouts, SSRF blocks, DNS failures,
-and network errors use stable messages. Unknown errors are sanitized (URLs/IPs
-stripped) and capped at 200 characters.
+redirect failures, and network errors use stable messages. Unknown errors become
+`Delivery failed`, without retaining arbitrary provider or exception text. Public
+projections normalize legacy error text through the same rules, preserve canonical
+HTTP summaries and known reason codes, and replace unrecognized codes with
+`unknown`. Error summaries remain capped at 200 characters.
 
 ## Retention policy
 

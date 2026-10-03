@@ -18,6 +18,7 @@ import {
   purgeExpiredDeliveryLogs,
   redactEndpointUrl,
   sanitizeErrorText,
+  WEBHOOK_ERROR_CODES,
 } from "../services/webhookLogPrivacy";
 
 const ENC_KEY = "WEBHOOK_DESTINATION_ENCRYPTION_KEY";
@@ -178,15 +179,38 @@ describe("error normalization", () => {
     });
   });
 
-  it("caps and sanitizes long unknown errors (no IPs/URLs)", () => {
+  it("replaces long unknown errors with a fixed summary", () => {
     const long = `upstream blew up at https://evil.example/path via 203.0.113.50 ${"x".repeat(500)}`;
     const normalized = normalizeDeliveryError(new Error(long));
     expect(normalized.errorCode).toBe("unknown");
     expect(normalized.lastError.length).toBeLessThanOrEqual(MAX_ERROR_TEXT_LENGTH);
     expect(normalized.lastError).not.toContain("evil.example");
     expect(normalized.lastError).not.toContain("203.0.113.50");
-    expect(normalized.lastError).toContain("[redacted-url]");
-    expect(normalized.lastError).toContain("[redacted-ip]");
+    expect(normalized.lastError).toBe("Delivery failed");
+  });
+
+  it.each([
+    new Error("TLS certificate rejected by webhook.internal:443; Authorization=REPRO_ONLY_SECRET_7831"),
+    "provider refused X-Api-Key=REPRO_ONLY_SECRET_7831 from webhook.internal",
+    "HTTP 500 Authorization=REPRO_ONLY_SECRET_7831",
+  ])("never echoes unclassified error detail: %#", (error) => {
+    expect(normalizeDeliveryError(error)).toEqual({
+      errorCode: "unknown",
+      lastError: "Delivery failed",
+    });
+  });
+
+  it.each([404, 429, 500, 503])("preserves a canonical HTTP %i summary", (status) => {
+    expect(normalizeDeliveryError(`HTTP ${status}`)).toEqual(normalizeHttpError(status));
+  });
+
+  it("keeps timeout classification ahead of canonical HTTP text", () => {
+    const error = new Error("HTTP 500");
+    error.name = "AbortError";
+    expect(normalizeDeliveryError(error)).toEqual({
+      errorCode: "timeout",
+      lastError: "Delivery timed out",
+    });
   });
 
   it("sanitizeErrorText redacts IPv6 literals", () => {
@@ -239,5 +263,51 @@ describe("publicDeliveryLogEndpoint", () => {
     expect(pub.endpointIdentity).not.toContain("pass");
     expect(pub.endpointIdentity).not.toContain("abc");
     expect(pub.lastError).not.toContain("10.1.2.3");
+  });
+
+  it.each([
+    "TLS certificate rejected by webhook.internal:443; Authorization=REPRO_ONLY_SECRET_7831",
+    "Delivery failed: X-Api-Key=REPRO_ONLY_SECRET_7831 from webhook.internal",
+    "HTTP 500\nAuthorization=REPRO_ONLY_SECRET_7831",
+  ])("normalizes unsafe legacy error text before public output: %#", (lastError) => {
+    const pub = publicDeliveryLogEndpoint({
+      endpointIdentity: "https://example.com/hook",
+      errorCode: "unknown",
+      lastError,
+    });
+    expect(pub.errorCode).toBe("unknown");
+    expect(pub.lastError).toBe("Delivery failed");
+  });
+
+  it.each([
+    ["http_client_error", "HTTP 404"],
+    ["http_server_error", "HTTP 503"],
+    ["http_rate_limited", "HTTP 429"],
+    ["timeout", "Delivery timed out"],
+    ["ssrf_blocked", "Destination blocked by SSRF policy"],
+    ["dns_failed", "DNS resolution failed"],
+    ["redirect_error", "Redirect handling failed"],
+    ["network_error", "Network error"],
+    ["unknown", "Delivery failed"],
+  ])("preserves the safe %s code and summary", (errorCode, lastError) => {
+    expect(WEBHOOK_ERROR_CODES).toContain(errorCode);
+    expect(publicDeliveryLogEndpoint({ errorCode, lastError })).toMatchObject({
+      errorCode,
+      lastError,
+    });
+  });
+
+  it.each(["Authorization=REPRO_ONLY_SECRET_7831", "constructor", "toString"])(
+    "replaces values outside the closed code set: %#",
+    (errorCode) => {
+      expect(publicDeliveryLogEndpoint({ errorCode, lastError: "Delivery failed" }))
+        .toMatchObject({ errorCode: "unknown", lastError: "Delivery failed" });
+    },
+  );
+
+  it("preserves absent error fields for successful or legacy deliveries", () => {
+    expect(publicDeliveryLogEndpoint({})).toMatchObject({ errorCode: null, lastError: null });
+    expect(publicDeliveryLogEndpoint({ errorCode: null, lastError: null }))
+      .toMatchObject({ errorCode: null, lastError: null });
   });
 });

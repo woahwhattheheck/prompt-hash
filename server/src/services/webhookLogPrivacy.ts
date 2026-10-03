@@ -264,8 +264,9 @@ function capErrorText(text: string): string {
 }
 
 /**
- * Strip hostnames, IPv4/IPv6 literals, and URL-looking fragments from error text
- * so persisted messages cannot re-introduce network detail.
+ * Best-effort scrubbing of URL fragments and IP literals in display text.
+ * Use normalizeDeliveryError for persisted or public delivery errors: arbitrary
+ * exception text may contain credentials or hostnames this scrubber cannot detect.
  */
 export function sanitizeErrorText(raw: string): string {
   let text = String(raw ?? "");
@@ -342,11 +343,13 @@ export function normalizeDeliveryError(err: unknown): NormalizedDeliveryError {
     return { errorCode: "network_error", lastError: "Network error" };
   }
 
-  const sanitized = sanitizeErrorText(message);
-  return {
-    errorCode: "unknown",
-    lastError: sanitized ? capErrorText(`Delivery failed: ${sanitized}`) : "Delivery failed",
-  };
+  // Keep canonical stored HTTP summaries when normalizing legacy/public logs.
+  const httpStatus = /^HTTP ([1-5]\d{2})$/.exec(message);
+  if (httpStatus && httpStatus[0] === message) {
+    return normalizeHttpError(Number(httpStatus[1]));
+  }
+
+  return { errorCode: "unknown", lastError: "Delivery failed" };
 }
 
 /** Fields written when creating a delivery log from a raw subscriber URL. */
@@ -386,11 +389,15 @@ export function publicDeliveryLogEndpoint(log: {
   const identity =
     (log.endpointIdentity && String(log.endpointIdentity)) ||
     (log.url ? redactEndpointUrl(String(log.url)) : "[unknown]");
+  const errorCode =
+    log.errorCode == null
+      ? null
+      : WEBHOOK_ERROR_CODES.find((code) => code === log.errorCode) ?? "unknown";
   return {
     ...(log.deliveryId != null ? { deliveryId: String(log.deliveryId) } : {}),
     endpointIdentity: identity,
-    errorCode: log.errorCode != null ? String(log.errorCode) : null,
-    lastError: log.lastError != null ? sanitizeErrorText(String(log.lastError)) : null,
+    errorCode,
+    lastError: log.lastError != null ? normalizeDeliveryError(String(log.lastError)).lastError : null,
   };
 }
 
