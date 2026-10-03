@@ -191,7 +191,7 @@ control.
 | --- | --- |
 | `content_hash` / `screenshot_hash` | Hex digest, 32–128 chars |
 | `ipfs_cid` | CIDv0 (`Qm…`) or CIDv1 (`bafy…` / `bafk…`) |
-| `url_ref` | Absolute `https://` URL, no credentials |
+| `url_ref` | Absolute `https://` URL, including valid ports and IPv6 hosts; no credentials |
 | `tx_hash` | 64-char hex digest |
 
 Rules enforced in `src/lib/reports/abuseEvidence.ts` and

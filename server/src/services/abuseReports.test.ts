@@ -9,6 +9,76 @@ import {
 import Report from "../models/Report";
 
 describe("abuseReports service", () => {
+  it.each([
+    "https://example.com:443/Proof",
+    "https://example.com:8443/Proof?id=AbC",
+    "https://[2001:db8::1]/Proof",
+    "https://[2001:db8::1]:8443/Proof",
+  ])("accepts HTTPS ports and IPv6 while retaining %s", (ref) => {
+    const evidence = { kind: "url_ref", ref, note: "Original reference" };
+    expect(normalizeEvidence([evidence])).toEqual([evidence]);
+  });
+
+  it.each([
+    "https://user:secret@example.com:8443/Proof",
+    "https://user:secret@[2001:db8::1]:8443/Proof",
+    "https://user@[2001:db8::1]/Proof",
+    "https://:secret@[2001:db8::1]:443/Proof",
+    "https://us%65r:secret@[2001:db8::1]/Proof",
+  ])("rejects parsed credentials in %s", (ref) => {
+    expect(() => normalizeEvidence([{ kind: "url_ref", ref }])).toThrow(
+      /credentials/,
+    );
+  });
+
+  it.each([
+    "https://example.com:65536/Proof",
+    "https://example.com:port/Proof",
+  ])("rejects an invalid URL port in %s", (ref) => {
+    expect(() => normalizeEvidence([{ kind: "url_ref", ref }])).toThrow(
+      /valid absolute URL/,
+    );
+  });
+
+  it("rejects HTTP even with an explicit port", () => {
+    expect(() =>
+      normalizeEvidence([
+        { kind: "url_ref", ref: "http://example.com:8443/Proof" },
+      ]),
+    ).toThrow(/must use https/);
+  });
+
+  it("deduplicates the default HTTPS port while retaining a distinct port", () => {
+    const first = {
+      kind: "url_ref",
+      ref: "https://example.com:443/Proof?id=AbC",
+      note: "First reference",
+    };
+    const otherPort = {
+      kind: "url_ref",
+      ref: "https://example.com:8443/Proof?id=AbC",
+      note: "Distinct reference",
+    };
+    expect(
+      normalizeEvidence([
+        first,
+        { kind: "url_ref", ref: "https://example.com/Proof?id=AbC" },
+        otherPort,
+      ]),
+    ).toEqual([first, otherPort]);
+  });
+
+  it.each([
+    "https://example.com:8443/victim@example.com",
+    "https://example.com:8443/proof?contact=victim@example.com",
+    "https://example.com:8443/" + "S" + "A".repeat(55),
+    "https://example.com:8443/proof?secret=" + "S" + "A".repeat(55),
+  ])("rejects private content in port-bearing URL %s", (ref) => {
+    expect(() => normalizeEvidence([{ kind: "url_ref", ref }])).toThrow(
+      /email|private keys/,
+    );
+  });
+
   it("rejects unsafe evidence and accepts valid refs", () => {
     expect(() =>
       normalizeEvidence([{ kind: "url_ref", ref: "javascript:alert(1)" }]),

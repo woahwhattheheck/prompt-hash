@@ -150,9 +150,15 @@ function looksUnsafeRef(ref: string): string | null {
   if (lower.startsWith("data:") || lower.startsWith("javascript:")) {
     return "Unsafe evidence scheme rejected";
   }
-  if (lower.includes("://") && /\/\/[^/]*:/.test(trimmed)) {
-    // user:pass@host
-    return "Evidence URLs must not include credentials";
+  if (lower.includes("://")) {
+    try {
+      const url = new URL(trimmed);
+      if (url.username || url.password) {
+        return "Evidence URLs must not include credentials";
+      }
+    } catch {
+      // Kind-specific validation rejects malformed references below.
+    }
   }
   if (EMAIL_RE.test(trimmed)) {
     return "Evidence ref must not contain email addresses";
