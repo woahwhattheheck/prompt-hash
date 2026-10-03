@@ -240,6 +240,69 @@ describe("cursor recovery after interrupted advance", () => {
 });
 
 describe("file-backed durability (restart)", () => {
+  it("initializes a nested store for concurrent first event writes", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
+    const filePath = path.join(dir, "nested", "notifications", "store.json");
+    try {
+      const repo1 = createFileSellerNotificationRepository(filePath);
+      const repo2 = createFileSellerNotificationRepository(filePath);
+      const events = [sale(40), sale(41)];
+
+      await Promise.all([
+        repo1.appendEvent(events[0]),
+        repo2.appendEvent(events[1]),
+      ]);
+
+      const reloaded = createFileSellerNotificationRepository(filePath);
+      expect(await reloaded.listEventsForWallet(WALLET)).toEqual(events);
+      expect((await reloaded.appendEvent(events[0])).created).toBe(false);
+      expect(await reloaded.countEvents()).toBe(2);
+      expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializes a nested store when saving the first cursor", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
+    const filePath = path.join(dir, "nested", "notifications", "store.json");
+    try {
+      const event = sale(42);
+      const cursor = {
+        ...emptyCursor(WALLET),
+        cursorEventId: event.eventId,
+        lastLedger: event.ledger,
+        readIds: [`notif:${event.eventId}`],
+      };
+      const repo = createFileSellerNotificationRepository(filePath);
+      await repo.saveCursor(cursor);
+
+      const reloaded = createFileSellerNotificationRepository(filePath);
+      expect(await reloaded.getCursor(WALLET)).toEqual(cursor);
+      expect(await reloaded.countEvents()).toBe(0);
+      expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializes an empty nested store when clearing before first use", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
+    const filePath = path.join(dir, "nested", "notifications", "store.json");
+    try {
+      const repo = createFileSellerNotificationRepository(filePath);
+      await repo.clear();
+
+      const reloaded = createFileSellerNotificationRepository(filePath);
+      expect(fs.existsSync(filePath)).toBe(true);
+      expect(await reloaded.listEventsForWallet(WALLET)).toEqual([]);
+      expect(await reloaded.countEvents()).toBe(0);
+      expect(fs.existsSync(`${filePath}.lock`)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("survives process restart via file store", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-"));
     const filePath = path.join(dir, "store.json");

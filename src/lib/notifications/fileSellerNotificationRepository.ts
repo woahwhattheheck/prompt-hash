@@ -19,6 +19,8 @@ function emptyShape(): FileShape {
 }
 
 async function withLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
+  // The lock is created before the store, so initialize its directory first.
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const start = Date.now();
   for (;;) {
     try {
