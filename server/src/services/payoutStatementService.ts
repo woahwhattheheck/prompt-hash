@@ -30,6 +30,43 @@ import User from "../models/User";
 const PAYOUT_STATEMENT_SECRET =
   process.env.PAYOUT_STATEMENT_SECRET || "payout-statement-secret-key";
 
+export class PayoutStatementAmountError extends RangeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PayoutStatementAmountError";
+  }
+}
+
+function safeStroops(value: number, field: string, allowNegative = false): number {
+  if (!Number.isSafeInteger(value) || (!allowNegative && value < 0)) {
+    throw new PayoutStatementAmountError(
+      `${field} must be ${allowNegative ? "a signed" : "a nonnegative"} safe integer in stroops`,
+    );
+  }
+  return value;
+}
+
+function statementFeeStroops(gross: number, feeBps: number): number {
+  try {
+    return platformFeeStroops(gross, feeBps);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new PayoutStatementAmountError(error.message);
+    }
+    throw error;
+  }
+}
+
+function sumStroops<Key extends string>(
+  items: Array<Record<Key, number>>,
+  key: Key,
+  field: string = key,
+): number {
+  // Every term is nonnegative, so reject as soon as the total exceeds the
+  // statement's exact Number range, before a rounded total can be accepted.
+  return items.reduce((sum, item) => safeStroops(sum + item[key], field), 0);
+}
+
 export function signPayoutStatement(
   data: object,
   secret: string = PAYOUT_STATEMENT_SECRET,
@@ -59,7 +96,7 @@ function buildSaleLine(
   purchase: PurchaseEventInput,
   feeBps: number,
 ): SaleLineItem {
-  const fee = platformFeeStroops(purchase.grossStroops, feeBps);
+  const fee = statementFeeStroops(purchase.grossStroops, feeBps);
   return {
     purchaseId: purchase.purchaseId,
     promptId: purchase.promptId,
@@ -76,7 +113,7 @@ function buildRefundLine(
   feeBps: number,
   priorSettledPeriodEnd?: string,
 ): RefundLineItem {
-  const fee = platformFeeStroops(refund.originalGrossStroops, feeBps);
+  const fee = statementFeeStroops(refund.originalGrossStroops, feeBps);
   const sellerDebit = refund.originalGrossStroops - fee;
   const isClawback = Boolean(
     priorSettledPeriodEnd &&
@@ -133,6 +170,14 @@ export function reconcilePayoutStatement(
 ): PayoutStatement {
   const feeBps = input.feeBps ?? DEFAULT_FEE_BPS;
   const period = input.period;
+  statementFeeStroops(0, feeBps);
+  const previousBalanceCarryoverStroops = safeStroops(
+    input.previousBalanceCarryoverStroops === undefined
+      ? 0
+      : input.previousBalanceCarryoverStroops,
+    "previousBalanceCarryoverStroops",
+    true,
+  );
 
   const purchasesInPeriod = input.purchases.filter((p) =>
     isWithinPeriod(p.purchasedAt, period.start, period.end),
@@ -150,7 +195,7 @@ export function reconcilePayoutStatement(
   const attempts: PayoutAttemptLineItem[] = (input.payoutAttempts ?? []).map(
     (a: PayoutAttemptInput) => ({
       attemptId: a.attemptId,
-      amountStroops: a.amountStroops,
+      amountStroops: safeStroops(a.amountStroops, "payoutAttempts.amountStroops"),
       status: a.status,
       attemptedAt: a.attemptedAt,
       failureReason: a.failureReason,
@@ -158,27 +203,27 @@ export function reconcilePayoutStatement(
     }),
   );
 
-  const grossStroops = sales.reduce((sum, s) => sum + s.grossStroops, 0);
-  const platformFeeStroopsTotal = sales.reduce(
-    (sum, s) => sum + s.platformFeeStroops,
-    0,
+  const grossStroops = sumStroops(sales, "grossStroops");
+  const platformFeeStroopsTotal = sumStroops(sales, "platformFeeStroops");
+  const refundSellerDebitStroops = sumStroops(
+    refunds,
+    "sellerDebitStroops",
+    "refundSellerDebitStroops",
   );
-  const refundSellerDebitStroops = refunds.reduce(
-    (sum, r) => sum + r.sellerDebitStroops,
-    0,
+  const clawbackStroops = sumStroops(
+    refunds.filter((r) => r.isClawback),
+    "sellerDebitStroops",
+    "clawbackStroops",
   );
-  const clawbackStroops = refunds
-    .filter((r) => r.isClawback)
-    .reduce((sum, r) => sum + r.sellerDebitStroops, 0);
 
-  const previousBalanceCarryoverStroops =
-    input.previousBalanceCarryoverStroops ?? 0;
-
-  const netSettlementStroops =
+  const netSettlementStroops = safeStroops(
     grossStroops -
-    platformFeeStroopsTotal -
-    refundSellerDebitStroops +
-    previousBalanceCarryoverStroops;
+      platformFeeStroopsTotal -
+      refundSellerDebitStroops +
+      previousBalanceCarryoverStroops,
+    "netSettlementStroops",
+    true,
+  );
 
   const payableStroops = Math.max(netSettlementStroops, 0);
   const closingBalanceCarryoverStroops = Math.min(netSettlementStroops, 0);
@@ -336,6 +381,13 @@ export interface AggregateFromDbOptions {
 export async function aggregateSellerStatementFromDb(
   options: AggregateFromDbOptions,
 ): Promise<PayoutStatement> {
+  const previousBalanceCarryoverStroops = safeStroops(
+    options.previousBalanceCarryoverStroops === undefined
+      ? 0
+      : options.previousBalanceCarryoverStroops,
+    "previousBalanceCarryoverStroops",
+    true,
+  );
   const sellerWallet = options.sellerWallet.toLowerCase();
   const user = await User.findOne({ walletAddress: sellerWallet }).lean();
   const payoutAddress =
@@ -364,7 +416,7 @@ export async function aggregateSellerStatementFromDb(
       purchases: [],
       refunds: [],
       payoutAttempts: options.payoutAttempts,
-      previousBalanceCarryoverStroops: options.previousBalanceCarryoverStroops,
+      previousBalanceCarryoverStroops,
       priorSettledPeriodEnd: options.priorSettledPeriodEnd,
     });
   }
@@ -437,7 +489,7 @@ export async function aggregateSellerStatementFromDb(
     purchases: purchaseEvents,
     refunds: refundEvents,
     payoutAttempts: options.payoutAttempts,
-    previousBalanceCarryoverStroops: options.previousBalanceCarryoverStroops,
+    previousBalanceCarryoverStroops,
     priorSettledPeriodEnd: options.priorSettledPeriodEnd,
   });
 }

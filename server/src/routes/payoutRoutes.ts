@@ -5,6 +5,7 @@
 import { Router, Request, Response } from "express";
 import PayoutStatementModel from "../models/PayoutStatement";
 import {
+  PayoutStatementAmountError,
   aggregateSellerStatementFromDb,
   exportStatementToCsv,
   exportStatementToJson,
@@ -50,7 +51,9 @@ payoutRouter.get(
         .lean();
       res.json({ statements });
     } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
+      res
+        .status(err instanceof PayoutStatementAmountError ? 400 : 500)
+        .json({ error: (err as Error).message });
     }
   },
 );
@@ -184,7 +187,9 @@ payoutRouter.post("/statements/generate", async (req: Request, res: Response) =>
 
     res.status(201).json({ statement });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res
+      .status(err instanceof PayoutStatementAmountError ? 400 : 500)
+      .json({ error: (err as Error).message });
   }
 });
 

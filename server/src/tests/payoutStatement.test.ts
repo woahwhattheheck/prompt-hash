@@ -15,6 +15,14 @@ jest.mock("../models/Purchase", () => ({ __esModule: true, default: { find: jest
 jest.mock("../models/Prompt", () => ({ __esModule: true, default: { find: jest.fn() } }));
 jest.mock("../models/FulfillmentRecord", () => ({ __esModule: true, default: { find: jest.fn() } }));
 jest.mock("../models/User", () => ({ __esModule: true, default: { findOne: jest.fn() } }));
+jest.mock("../models/PayoutStatement", () => ({ __esModule: true, default: { findOneAndUpdate: jest.fn() } }));
+
+import express from "express";
+import request from "supertest";
+import PayoutStatementModel from "../models/PayoutStatement";
+import User from "../models/User";
+import Prompt from "../models/Prompt";
+import { payoutRouter } from "../routes/payoutRoutes";
 
 import {
   DEFAULT_FEE_BPS,
@@ -43,6 +51,172 @@ function fee(gross: number): number {
 function sellerNet(gross: number): number {
   return gross - fee(gross);
 }
+
+describe("statement amount boundaries", () => {
+  const period = {
+    start: "2026-01-01T00:00:00.000Z",
+    end: "2026-01-31T23:59:59.999Z",
+  };
+  const purchase = (grossStroops: number, purchaseId = "p1"): PurchaseEventInput => ({
+    purchaseId,
+    promptId: "1",
+    buyerWallet: "gbuyer",
+    grossStroops,
+    purchasedAt: "2026-01-15T00:00:00.000Z",
+  });
+  const refund = (originalGrossStroops: number, purchaseId = "p1"): RefundEventInput => ({
+    purchaseId,
+    promptId: "1",
+    originalGrossStroops,
+    originalPurchasedAt: "2025-12-15T00:00:00.000Z",
+    refundedAt: "2026-01-15T00:00:00.000Z",
+  });
+  const base = { sellerWallet: "GSELLER", period, purchases: [] as PurchaseEventInput[] };
+
+  it.each(["1", 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, -Number.MAX_SAFE_INTEGER - 1])(
+    "rejects an invalid carryover before signing: %p",
+    (carryover) => {
+      expect(() => reconcilePayoutStatement({
+        ...base,
+        previousBalanceCarryoverStroops: carryover as unknown as number,
+      })).toThrow(RangeError);
+    },
+  );
+
+  it.each([-1, 0.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects an invalid payout attempt amount: %p",
+    (amountStroops) => {
+      expect(() => reconcilePayoutStatement({
+        ...base,
+        payoutAttempts: [{
+          attemptId: "attempt",
+          amountStroops,
+          status: "pending",
+          attemptedAt: period.end,
+        }],
+      })).toThrow(RangeError);
+    },
+  );
+
+  it("rejects a gross total outside the exact numeric range", () => {
+    expect(() => reconcilePayoutStatement({
+      ...base,
+      purchases: [purchase(Number.MAX_SAFE_INTEGER), purchase(2, "p2")],
+    })).toThrow(/grossStroops/);
+  });
+
+  it("rejects an overflowing refund total made from individually valid refunds", () => {
+    expect(() => reconcilePayoutStatement({
+      ...base,
+      feeBps: 0,
+      refunds: [refund(Number.MAX_SAFE_INTEGER), refund(2, "p2")],
+    })).toThrow(/refundSellerDebitStroops/);
+  });
+
+  it.each([1, -1])("rejects net settlement overflow with carryover %i", (carryover) => {
+    expect(() => reconcilePayoutStatement({
+      ...base,
+      feeBps: 0,
+      purchases: carryover > 0 ? [purchase(Number.MAX_SAFE_INTEGER)] : [],
+      refunds: carryover < 0 ? [refund(Number.MAX_SAFE_INTEGER)] : [],
+      previousBalanceCarryoverStroops: carryover,
+    })).toThrow(/netSettlementStroops/);
+  });
+
+  it.each([Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER])(
+    "preserves a valid signed carryover boundary in JSON and CSV: %p",
+    (carryover) => {
+      const statement = reconcilePayoutStatement({ ...base, previousBalanceCarryoverStroops: carryover });
+      expect(statement.netSettlementStroops).toBe(carryover);
+      expect(JSON.parse(exportStatementToJson(statement)).netSettlementStroops).toBe(carryover);
+      expect(exportStatementToCsv(statement)).toContain(`summary,netSettlementStroops,${carryover}`);
+    },
+  );
+
+  it("keeps an exact maximum-safe aggregate and its fee/refund reconciliation", () => {
+    const statement = reconcilePayoutStatement({
+      ...base,
+      purchases: [purchase(Number.MAX_SAFE_INTEGER - 1), purchase(1, "p2")],
+      refunds: [refund(1, "p2")],
+    });
+    expect(statement.grossStroops).toBe(Number.MAX_SAFE_INTEGER);
+    const expectedNet = BigInt(Number.MAX_SAFE_INTEGER) - BigInt(fee(Number.MAX_SAFE_INTEGER - 1)) - 1n;
+    expect(BigInt(statement.netSettlementStroops)).toBe(expectedNet);
+  });
+
+  describe("actual payout HTTP routes", () => {
+    const persist = PayoutStatementModel.findOneAndUpdate as jest.Mock;
+    const findUser = User.findOne as jest.Mock;
+    const findPrompts = Prompt.find as jest.Mock;
+    const payload = {
+      sellerWallet: base.sellerWallet,
+      periodStart: period.start,
+      periodEnd: period.end,
+      purchases: [purchase(1000)],
+    };
+    const app = express();
+    app.use(express.json());
+    app.use("/api/payouts", payoutRouter);
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      persist.mockResolvedValue({});
+    });
+
+    it.each(["1", 0.5, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects invalid JSON carryover %p without persisting a statement",
+      async (carryover) => {
+        const res = await request(app).post("/api/payouts/statements/generate").send({
+          ...payload,
+          previousBalanceCarryoverStroops: carryover,
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toContain("previousBalanceCarryoverStroops");
+        expect(res.body.statement).toBeUndefined();
+        expect(persist).not.toHaveBeenCalled();
+      },
+    );
+
+    it("rejects aggregate overflow before persistence", async () => {
+      const res = await request(app).post("/api/payouts/statements/generate").send({
+        ...payload,
+        purchases: [purchase(Number.MAX_SAFE_INTEGER), purchase(2, "p2")],
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("grossStroops");
+      expect(persist).not.toHaveBeenCalled();
+    });
+
+    it("rejects a nonfinite query carryover before database reads", async () => {
+      findUser.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+      findPrompts.mockReturnValue({ select: () => ({ lean: jest.fn().mockResolvedValue([]) }) });
+      const res = await request(app).get("/api/payouts/statements/GSELLER").query({
+        from: period.start,
+        to: period.end,
+        carryover: "1e999",
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("previousBalanceCarryoverStroops");
+      expect(findUser).not.toHaveBeenCalled();
+      expect(findPrompts).not.toHaveBeenCalled();
+    });
+
+    it("persists a numeric carryover as the exact numeric net", async () => {
+      const res = await request(app).post("/api/payouts/statements/generate").send({
+        ...payload,
+        previousBalanceCarryoverStroops: 1,
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.statement.netSettlementStroops).toBe(951);
+      expect(res.body.statement.payableStroops).toBe(951);
+      expect(persist).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ netSettlementStroops: 951, previousBalanceCarryoverStroops: 1 }),
+        expect.any(Object),
+      );
+    });
+  });
+});
 
 describe("platformFeeStroops (contract DEFAULT_FEE_BPS)", () => {
   it("matches contracts/prompt-hash DEFAULT_FEE_BPS = 500", () => {

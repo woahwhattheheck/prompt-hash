@@ -24,6 +24,14 @@ platformFeeStroops = floor(grossStroops * feeBps / 10_000)
 ```
 
 All statement amounts are integers in **stroops** (1 XLM = 10_000_000 stroops).
+Inputs and totals must remain within JavaScript's safe integer range. Carryover
+may be negative; sale, refund, and payout-attempt amounts must be nonnegative.
+JSON numeric strings, fractional amounts, nonfinite values, and totals outside
+that range are rejected with HTTP 400 before a statement is signed or persisted.
+Live-preview carryover is validated before database reads. JSON monetary fields
+remain numbers, and CSV retains their exact integer text, including signed
+carryover boundaries.
+
 When aggregating from Mongo, `Prompt.price` (XLM) is converted with
 `xlmToStroops` in the same constants module. Gross amounts come from stored
 prompt prices / purchase events — never from invented USD figures.
@@ -98,7 +106,7 @@ badges, CSV/JSON export.
 ## Tests
 
 ```bash
-cd server && npm test -- --testPathPattern=payoutStatement
+cd server && npm test -- --testPathPatterns=payoutStatement
 ```
 
 Frontend:
