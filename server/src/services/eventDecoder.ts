@@ -131,7 +131,8 @@ function resolveLifecycle(raw: EventEnvelope): {
   contractEvent: string | null;
 } {
   const fromLifecycle =
-    typeof raw.lifecycle === "string"
+    typeof raw.lifecycle === "string" &&
+    Object.prototype.hasOwnProperty.call(LIFECYCLE_TO_CONTRACT_EVENT, raw.lifecycle)
       ? (LIFECYCLE_TO_CONTRACT_EVENT[raw.lifecycle as LifecycleEvent] ?? null)
       : null;
 
@@ -142,7 +143,10 @@ function resolveLifecycle(raw: EventEnvelope): {
     };
   }
 
-  if (raw.contractEvent && CONTRACT_EVENT_TO_LIFECYCLE[raw.contractEvent]) {
+  if (
+    typeof raw.contractEvent === "string" &&
+    Object.prototype.hasOwnProperty.call(CONTRACT_EVENT_TO_LIFECYCLE, raw.contractEvent)
+  ) {
     return {
       lifecycle: CONTRACT_EVENT_TO_LIFECYCLE[raw.contractEvent],
       contractEvent: raw.contractEvent,

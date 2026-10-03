@@ -116,6 +116,26 @@ describe("unsupported versions fail safely (dead-letter)", () => {
     expect(result.deadLetter.reason).toBe("UNKNOWN_EVENT_TYPE");
   });
 
+  for (const field of ["lifecycle", "contractEvent"] as const) {
+    it.each(["__proto__", "constructor", "toString"])(
+      `${field}=%s is dead-lettered instead of resolving an inherited map entry`,
+      (value) => {
+        const envelope: EventEnvelope = { schemaVersion: 1, [field]: value };
+        const result = decodeEvent(envelope, { now: fixedNow });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+
+        expect(result.deadLetter.reason).toBe("UNKNOWN_EVENT_TYPE");
+        expect(result.deadLetter.raw).toEqual(envelope);
+        expect(result.deadLetter.receivedAt).toBe(fixedNow.toISOString());
+
+        const sink = new InMemoryEventDeadLetter();
+        routeToDeadLetter(result.deadLetter, sink);
+        expect(sink.byReason("UNKNOWN_EVENT_TYPE")).toHaveLength(1);
+      },
+    );
+  }
+
   it("missing required fields → SCHEMA_VALIDATION_FAILED", () => {
     const fixture = loadFixture("unsupported.missing_fields.json");
     const result = decodeEvent(fixture, { now: fixedNow });
