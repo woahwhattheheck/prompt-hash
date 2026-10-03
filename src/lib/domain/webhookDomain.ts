@@ -126,6 +126,7 @@ export async function registerWebhookSubscription(
 
   if (existing) {
     existing.url = String(url);
+    existing.secret = secret;
     existing.events = resolvedEvents;
     existing.active = true;
     existing.failureCount = 0;

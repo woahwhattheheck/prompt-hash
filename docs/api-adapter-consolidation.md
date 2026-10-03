@@ -38,6 +38,10 @@ verification cannot fork.
   a signed ownership proof over `prompt-hash webhooks:{addr}:{timestamp}`.
 - **Webhook destinations** pass the shared SSRF check
   (`validateWebhookUrl`) before persistence.
+- **Webhook signing secrets** are generated on registration and rotated on
+  update. The POST response returns the key saved for delivery signatures;
+  clients updating a subscription must replace their stored key. GET responses
+  exclude the secret.
 
 ## Supported dual mounts (not deprecated)
 
@@ -87,7 +91,8 @@ npm run guard:api-domain-drift
 ```
 
 Cross-adapter fixtures cover purchase entitlement, publish ownership,
-idempotent purchase recording, webhook auth/SSRF, and auth/error parity.
+idempotent purchase recording, webhook auth/SSRF, persisted signing-secret
+rotation, and auth/error parity.
 
 ## Non-goals
 

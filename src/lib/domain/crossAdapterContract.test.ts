@@ -2,6 +2,7 @@
  * Cross-adapter contract fixtures (#184).
  */
 
+import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getBuyerVersion,
@@ -290,6 +291,67 @@ describe("webhook contract", () => {
     expect(viaHttp.status).toBe(got.status);
     expect(viaHttp.body).toEqual(got.body);
   });
+
+  it.each([
+    { adapter: "domain", register: registerWebhookSubscription },
+    {
+      adapter: "HTTP dispatcher",
+      register: (
+        deps: WebhookDomainDeps,
+        input: Parameters<typeof registerWebhookSubscription>[1],
+      ) => handleWebhookHttp(deps, { ...input, method: "POST" }),
+    },
+  ])(
+    "$adapter persists the signing secret returned when updating",
+    async ({ register }) => {
+      const deps = makeWebhookDeps({
+        adminToken: "synthetic-admin-token",
+        generateSecret: vi
+          .fn()
+          .mockReturnValueOnce("secret-first")
+          .mockReturnValueOnce("secret-rotated"),
+      });
+      const headers = { authorization: "Bearer synthetic-admin-token" };
+      const registered = await register(deps, {
+        headers,
+        body: { walletAddress: "gowner", url: "https://example.com/old" },
+      });
+      expect(registered.status).toBe(201);
+      expect(registered.body).toMatchObject({ secret: "secret-first" });
+
+      const existing = await deps.findByWallet("gowner");
+      if (!existing)
+        throw new Error("Registration did not persist the subscription");
+      let persistedSecret = "";
+      existing.save = vi.fn(async () => {
+        persistedSecret = existing.secret ?? "";
+      });
+
+      const updated = await register(deps, {
+        headers,
+        body: { walletAddress: "gowner", url: "https://example.com/new" },
+      });
+      expect(updated.status).toBe(200);
+      expect(updated.body).toMatchObject({ secret: "secret-rotated" });
+      expect(existing.save).toHaveBeenCalledOnce();
+
+      const payload = JSON.stringify({ event: "PromptPurchased", data: {} });
+      const responseSecret = (updated.body as { secret: string }).secret;
+      const deliverySignature = createHmac("sha256", persistedSecret)
+        .update(payload)
+        .digest("hex");
+      expect(
+        createHmac("sha256", responseSecret).update(payload).digest("hex"),
+      ).toBe(deliverySignature);
+
+      const publicSubscription = await getWebhookSubscription(deps, {
+        headers,
+        query: { walletAddress: "gowner" },
+      });
+      expect(publicSubscription.status).toBe(200);
+      expect(publicSubscription.body).not.toHaveProperty("secret");
+    },
+  );
 
   it("blocks invalid destination URLs", async () => {
     vi.spyOn(adapterAuth, "validateSignedWebhookOwner").mockReturnValue("gowner");
