@@ -44,9 +44,22 @@ interface PayoutStatementsCardProps {
 const STROOPS_PER_XLM = 10_000_000;
 
 function stroopsToXlm(stroops: number): string {
-  return (stroops / STROOPS_PER_XLM).toFixed(7).replace(/\.?0+$/, (m) =>
-    m.includes(".") ? "" : m,
-  );
+  if (!Number.isSafeInteger(stroops)) {
+    return (stroops / STROOPS_PER_XLM).toFixed(7).replace(/\.?0+$/, (m) =>
+      m.includes(".") ? "" : m,
+    );
+  }
+
+  // Division as a Number can round away a stroop near the safe integer limit.
+  const amount = BigInt(stroops);
+  const magnitude = amount < 0n ? -amount : amount;
+  const scale = BigInt(STROOPS_PER_XLM);
+  const whole = magnitude / scale;
+  const fraction = magnitude % scale;
+  const sign = amount < 0n ? "-" : "";
+  return fraction === 0n
+    ? `${sign}${whole}`
+    : `${sign}${whole}.${fraction.toString().padStart(7, "0")}`;
 }
 
 function statusBadgeClass(status: StatementStatus): string {

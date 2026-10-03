@@ -120,6 +120,15 @@ Mounted at `/api/payouts` (see `server/src/routes/payoutRoutes.ts`).
 `src/pages/profile/PayoutSettingsPage.tsx` — period picker, preview, status
 badges, CSV/JSON export.
 
+The card formats admitted safe integer stroop amounts with integer quotient and
+remainder, preserving all seven XLM decimal places without floating-point
+division. For example, `9007199254740991` stroops displays as
+`900719925.4740991 XLM`; negative carryover preserves the same exact magnitude.
+Whole XLM amounts retain their integer presentation, while fractional values
+retain seven decimal places. The existing handling of invalid numeric values is
+unchanged; the server still rejects those values before statement generation.
+JSON and CSV monetary fields remain integer stroops.
+
 ## Tests
 
 ```bash
