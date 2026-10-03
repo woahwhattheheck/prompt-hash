@@ -142,6 +142,91 @@ describe("unsupported versions fail safely (dead-letter)", () => {
     );
   }
 
+  const noncoercibleNames = [
+    ["object", '{"toString":null}'],
+    ["array", '[{"toString":null}]'],
+  ] as const;
+
+  for (const field of ["lifecycle", "contractEvent"] as const) {
+    it.each(noncoercibleNames)(
+      `${field} parsed JSON %s is dead-lettered without coercing its value`,
+      (_shape, json) => {
+        const envelope = JSON.parse(
+          `{"schemaVersion":1,"${field}":${json}}`,
+        ) as EventEnvelope;
+        expect(() => decodeEvent(envelope, { now: fixedNow })).not.toThrow();
+        const result = decodeEvent(envelope, { now: fixedNow });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+
+        expect(result.deadLetter.reason).toBe("UNKNOWN_EVENT_TYPE");
+        expect(typeof result.deadLetter.message).toBe("string");
+        expect(result.deadLetter.message.length).toBeGreaterThan(0);
+        expect(result.deadLetter.lifecycle).toBeNull();
+        expect(result.deadLetter.contractEvent).toBeNull();
+        expect(result.deadLetter.raw).toBe(envelope);
+        expect(result.deadLetter.receivedAt).toBe(fixedNow.toISOString());
+
+        const sink = new InMemoryEventDeadLetter();
+        expect(() => routeToDeadLetter(result.deadLetter, sink)).not.toThrow();
+        expect(sink.byReason("UNKNOWN_EVENT_TYPE")).toEqual([
+          result.deadLetter,
+        ]);
+        expect(sink.list()[0].raw).toBe(envelope);
+      },
+    );
+  }
+
+  for (const [schemaVersion, reason] of [
+    [99, "UNSUPPORTED_VERSION"],
+    ["nope", "CORRUPT_PAYLOAD"],
+  ] as const) {
+    it.each(noncoercibleNames)(
+      `${reason} preserves string/null metadata with a parsed JSON %s contractEvent`,
+      (_shape, json) => {
+        const envelope = JSON.parse(
+          `{"schemaVersion":${JSON.stringify(schemaVersion)},"lifecycle":"publish","contractEvent":${json}}`,
+        ) as EventEnvelope;
+        expect(() => decodeEvent(envelope, { now: fixedNow })).not.toThrow();
+        const result = decodeEvent(envelope, { now: fixedNow });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+
+        expect(result.deadLetter.reason).toBe(reason);
+        expect(result.deadLetter.lifecycle).toBe("publish");
+        expect(result.deadLetter.contractEvent).toBeNull();
+        expect(result.deadLetter.schemaVersion).toBe(
+          typeof schemaVersion === "number" ? schemaVersion : null,
+        );
+        expect(result.deadLetter.raw).toBe(envelope);
+        expect(result.deadLetter.receivedAt).toBe(fixedNow.toISOString());
+
+        const sink = new InMemoryEventDeadLetter();
+        routeToDeadLetter(result.deadLetter, sink);
+        expect(sink.byReason(reason)).toEqual([result.deadLetter]);
+        expect(sink.list()[0].raw).toBe(envelope);
+      },
+    );
+  }
+
+  it.each([
+    ["lifecycle", '{"toString":null}'],
+    ["contractEvent", '[{"toString":null}]'],
+  ] as const)(
+    "valid event-name resolution survives malformed %s from parsed JSON",
+    (field, json) => {
+      const fixture = loadFixture("publish.v1.json");
+      const envelope = JSON.parse(
+        JSON.stringify({ ...fixture, [field]: JSON.parse(json) }),
+      ) as EventEnvelope;
+
+      expect(() => decodeEvent(envelope, { now: fixedNow })).not.toThrow();
+      const result = decodeEvent(envelope, { now: fixedNow });
+      expect(result.ok).toBe(true);
+      expect(result).toEqual(decodeEvent(fixture, { now: fixedNow }));
+    },
+  );
+
   it("missing required fields → SCHEMA_VALIDATION_FAILED", () => {
     const fixture = loadFixture("unsupported.missing_fields.json");
     const result = decodeEvent(fixture, { now: fixedNow });

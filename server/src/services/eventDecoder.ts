@@ -118,6 +118,13 @@ function asString(value: unknown): string | null {
   return null;
 }
 
+function eventNameForMessage(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  // Parsed JSON can contain an object whose toString is not callable.
+  return asString(value) ?? `[${typeof value}]`;
+}
+
 function normalizeField(key: string, value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const str = asString(value);
@@ -193,7 +200,9 @@ function deadLetter(
       reason,
       message,
       schemaVersion: extras.schemaVersion ?? (typeof raw.schemaVersion === "number" ? raw.schemaVersion : null),
-      contractEvent: extras.contractEvent ?? raw.contractEvent ?? null,
+      contractEvent:
+        extras.contractEvent ??
+        (typeof raw.contractEvent === "string" ? raw.contractEvent : null),
       lifecycle: extras.lifecycle ?? (typeof raw.lifecycle === "string" ? raw.lifecycle : null),
       raw,
       receivedAt: new Date(0).toISOString(), // overwritten by decodeEvent for clock control
@@ -246,7 +255,7 @@ export function decodeEvent(
     return finish(
       deadLetter(
         "UNKNOWN_EVENT_TYPE",
-        `Unable to resolve lifecycle from lifecycle=${String(raw.lifecycle)} contractEvent=${String(raw.contractEvent)}`,
+        `Unable to resolve lifecycle from lifecycle=${eventNameForMessage(raw.lifecycle)} contractEvent=${eventNameForMessage(raw.contractEvent)}`,
         raw,
       ),
     );
