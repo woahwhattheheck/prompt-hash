@@ -15,7 +15,7 @@ Before a creator submits a listing from `/sell`, the app checks the draft agains
 ## API
 
 - `POST /api/fingerprint/publish-check` — body `{ title, content, excludeOnChainId? }` → `{ decision, score, similarTo, flag, feedback }`
-- `POST /api/fingerprint/override` — maintainer override with audited `{ actorAddress, previousDecision, newDecision, reason, … }`
+- `POST /api/fingerprint/override` — authenticated maintainer override; body `{ promptId, newDecision, reason, appealId? }`, response `{ override, result, replayed, appealSync? }`
 - Appeals remain on `/api/appeals*` for creator false-positive requests
 
 ## Creator feedback
@@ -24,17 +24,44 @@ Before a creator submits a listing from `/sell`, the app checks the draft agains
 
 ## Override audit
 
-Overrides append an immutable record (actor, prior/new decision, reason, timestamp, version). Prior decisions are never deleted.
+The override route requires `Authorization: Bearer <credential>` verified by the existing shared `server/src/auth/adminPrincipal.ts` implementation from [PR #264](https://github.com/Prompt-Hash-Stellar/prompt-hash/pull/264). This contribution reuses that file unchanged. The existing `admin` role is required, with audience `prompt-hash:similarity-override`. A `report_reviewer` credential alone cannot override a decision. Credentials use the existing operator-managed `ADMIN_PRINCIPAL_SECRET` and revocation mechanism; this endpoint does not issue credentials or grant roles. Missing, malformed, expired, revoked, incorrectly signed, or incorrectly scoped credentials fail before prompt/appeal lookup. Authentication failures return 401; an authenticated principal without the role receives 403.
+
+`actorAddress` in the audit is the exact verified principal subject, including case. The route ignores caller-supplied actor, roles, score, similar prompt, previous decision, and version. It derives the decision evidence from the stored prompt. A missing prompt returns 404; absent scan evidence or a concurrent state change returns 409. A supplied appeal must exist and refer to the same prompt before any decision write.
+
+Each decision change appends an audit record to `Prompt.similarityOverrides` in the **same conditional document update** that changes the flag and advances `similarityDecisionVersion`. Existing records are retained. New prompts start at version 1; an older document without the field is guarded as missing and receives its first stored override version without a separate migration. When an appeal already has a higher version, the new version advances beyond both stored counters. The audit includes verified actor, stored prior decision/score/source, requested new decision/reason, timestamp, and version. Caller-provided actor, score, source, prior decision, timestamp, or version never replaces these verified or stored values. Mongoose validates the update, including audit evidence, before writing.
+
+The update also guards the observed score, source, flag, scan timestamp, scan job/status, and document timestamp. This matters because scans do not currently advance the override counter: a scan that completes between the read and write must produce a conflict instead of being silently overwritten. Reload the current evidence before making a new decision after a 409.
+
+### Optional appeal copy
+
+The required audit lives on the Prompt even when no `appealId` is supplied. If one is supplied, the route also attempts the existing `Appeal.previousDecisions`/status update, using the recorded appeal version and timestamp as preconditions. This is a secondary copy, not a cross-document transaction. It does not require a new MongoDB replica-set topology.
+
+A successful HTTP response means the Prompt decision and its audit are committed. Inspect `appealSync.status` separately:
+
+| Status | Meaning and next step |
+| --- | --- |
+| `synced` | The corresponding audit was copied to the matching appeal, or an exact copy was already present. |
+| `pending` | The appeal write/read failed. The Prompt decision and audit remain committed. The same authorized principal can retry the same prompt, decision, trimmed reason, and appeal id to repair the copy. No background retry is scheduled. |
+| `conflict` | The appeal changed or disappeared before its guarded update. The route preserves that newer appeal state. Review the current appeal and the stored Prompt audit; blindly retrying does not overwrite the intervening review. |
+
+An exact replay of the latest stored override returns `replayed: true` and can retry only the appeal copy, without another Prompt decision update or audit append. A different actor, reason, or intervening scan cannot use that replay. The stored appeal preconditions are retained in the required audit for recovery. This route does not change the authority or behavior of other appeal endpoints.
 
 ## Code map
 
 - `server/src/services/similarityDetection.ts` — thresholds, decide/feedback/override
-- `server/src/controllers/fingerprintController.ts` — publish-check + override handlers
+- `server/src/controllers/fingerprintController.ts` — publish-check + authenticated override handlers
+- `server/src/services/similarityOverride.ts` — stored decision binding, atomic required audit, guarded appeal copy
+- `server/src/models/Prompt.ts` — typed override audit and decision version
 - `src/pages/sell/CreatePromptForm.tsx` — pre-submit gate
-- `src/test/similarityDetection.test.ts` — allow / review / block / override coverage
+- `src/test/similarityDetection.test.ts` — allow / review / block / override algorithm coverage
+- `src/test/similarityOverride.test.ts` — actual Express route, authentication, Mongoose update validation, races, and recovery
 
 ## Tests
 
+Install the repository's root test dependencies and existing server dependencies (`npm ci` at the root and `npm ci --prefix server`), then run:
+
 ```bash
-npm run test:similarity
+npm run test:similarity -- --maxWorkers=1 --no-file-parallelism
 ```
+
+The focused suite contains 39 existing similarity tests and 35 override regressions. The override tests execute the actual Express router, shared principal verifier, service, and Mongoose query casting/update validators. Only the MongoDB collection boundary is replaced with a deterministic adapter that applies guarded writes. This verifies request behavior and failure handling; it is not a claim of native MongoDB durability, replica-set transaction behavior, or a hosted deployment. No live database, wallet, or administrator credentials are needed for these tests.

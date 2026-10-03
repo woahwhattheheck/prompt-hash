@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["src/test/similarityDetection.test.ts"],
+    include: ["src/test/similarityDetection.test.ts", "src/test/similarityOverride.test.ts"],
   },
   resolve: {
     alias: {

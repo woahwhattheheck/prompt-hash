@@ -12,17 +12,14 @@ import {
   SUPPORTED_ALGORITHMS,
   FINGERPRINT_ALGORITHM_VERSION,
 } from "../services/fingerprint";
-import Prompt from "../models/Prompt";
 import {
   scanForSimilarity,
   checkPublishSimilarity,
-  applyMaintainerOverride,
-  withOverride,
-  flagToDecision,
-  type PublicationDecision,
-  type PublishSimilarityResult,
 } from "../services/similarityDetection";
-import Appeal from "../models/Appeal";
+import { ADMIN_ROLE, AdminAuthError, authorizeAdminPrincipal } from "../auth/adminPrincipal";
+import { overridePromptSimilarity, SimilarityOverrideError } from "../services/similarityOverride";
+
+export const SIMILARITY_OVERRIDE_AUDIENCE = "prompt-hash:similarity-override";
 
 
 export async function computeFingerprint(req: Request, res: Response) {
@@ -149,106 +146,24 @@ export async function checkPublishSimilarityHandler(req: Request, res: Response)
 
 export async function overrideSimilarityDecision(req: Request, res: Response) {
   try {
-    const {
-      promptId,
-      actorAddress,
-      newDecision,
-      reason,
-      appealId,
-      score,
-      similarTo,
-      previousDecision,
-    } = req.body ?? {};
-
-    if (!promptId || !actorAddress || !newDecision || !reason) {
-      return res.status(400).json({
-        error: "promptId, actorAddress, newDecision, and reason are required",
-      });
-    }
-
-    const validDecisions: PublicationDecision[] = ["allow", "review", "block"];
-    if (!validDecisions.includes(newDecision)) {
-      return res.status(400).json({
-        error: `newDecision must be one of: ${validDecisions.join(", ")}`,
-      });
-    }
-
-    const prompt = await Prompt.findOne({ onChainId: String(promptId) }).lean();
-    const currentFlag = (prompt as any)?.similarityFlag ?? "highly_similar";
-    const resolvedPrevious: PublicationDecision =
-      previousDecision && validDecisions.includes(previousDecision)
-        ? previousDecision
-        : flagToDecision(currentFlag);
-
-    const override = applyMaintainerOverride({
-      promptId: String(promptId),
-      actorAddress: String(actorAddress),
-      previousDecision: resolvedPrevious,
-      newDecision,
-      reason: String(reason),
-      score:
-        typeof score === "number"
-          ? score
-          : typeof (prompt as any)?.similarityScore === "number"
-            ? (prompt as any).similarityScore
-            : 0,
-      similarTo:
-        similarTo ?? (prompt as any)?.similarTo ?? null,
-      previousVersion: 1,
+    // Authenticate before validating input or looking up any prompt/appeal.
+    const principal = authorizeAdminPrincipal(req.get("authorization"), {
+      expectedAud: SIMILARITY_OVERRIDE_AUDIENCE,
+      requiredRoles: [ADMIN_ROLE],
     });
-
-    const flag =
-      newDecision === "block"
-        ? "highly_similar"
-        : newDecision === "review"
-          ? "suspicious"
-          : "clean";
-
-    await Prompt.findOneAndUpdate(
-      { onChainId: String(promptId) },
-      {
-        $set: {
-          similarityFlag: flag,
-          similarTo: newDecision === "allow" ? null : (prompt as any)?.similarTo ?? null,
-          similarityCheckedAt: new Date(),
-        },
-      },
+    const { promptId, newDecision, reason, appealId } = req.body ?? {};
+    const result = await overridePromptSimilarity(
+      { promptId, newDecision, reason, appealId },
+      principal.sub,
     );
-
-    if (appealId) {
-      await Appeal.findByIdAndUpdate(appealId, {
-        $push: { previousDecisions: override },
-        $set: {
-          status: newDecision === "allow" ? "rejected" : "upheld",
-          resolvedAt: new Date(),
-          decisionVersion: override.decisionVersion,
-          reasonCode: "similarity_override",
-        },
-      });
-    }
-
-    const base: PublishSimilarityResult = {
-      flag: currentFlag,
-      score: override.score,
-      similarTo: override.similarTo,
-      decision: resolvedPrevious,
-      feedback: {
-        decision: resolvedPrevious,
-        title: "",
-        summary: "",
-        actions: [],
-        scorePercent: Math.round(override.score * 100),
-        similarTo: override.similarTo,
-      },
-    };
-
-    return res.json({
-      override,
-      result: withOverride(base, override),
-    });
+    return res.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Internal error";
-    const status = message.includes("required") || message.includes("must change") ? 400 : 500;
-    return res.status(status).json({ error: message });
+    if (err instanceof AdminAuthError) {
+      return res.status(err.code === "forbidden" ? 403 : 401).json({ error: err.message, code: err.code });
+    }
+    if (err instanceof SimilarityOverrideError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    return res.status(500).json({ error: "Unable to persist similarity override" });
   }
 }

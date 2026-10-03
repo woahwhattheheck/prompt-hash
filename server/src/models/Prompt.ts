@@ -1,5 +1,23 @@
 import mongoose from "mongoose";
 
+// Kept with the decision so each override and its audit append are one atomic
+// document update. Actor subjects retain the exact verified principal identity.
+const similarityOverrideSchema = new mongoose.Schema({
+  promptId: { type: String, required: true },
+  actorAddress: { type: String, required: true },
+  previousDecision: { type: String, enum: ["allow", "review", "block"], required: true },
+  newDecision: { type: String, enum: ["allow", "review", "block"], required: true },
+  reason: { type: String, required: true, trim: true },
+  score: { type: Number, required: true, min: 0, max: 1 },
+  similarTo: { type: String, default: null },
+  at: { type: String, required: true },
+  decisionVersion: { type: Number, required: true, min: 2, validate: Number.isSafeInteger },
+  // Preconditions for the optional Appeal projection, retained for safe retry.
+  appealId: { type: String },
+  appealPreviousVersion: { type: Number, min: 1, validate: Number.isSafeInteger },
+  appealPreviousUpdatedAt: { type: Date },
+}, { _id: false });
+
 const promptSchema = new mongoose.Schema(
   {
     image: {
@@ -113,6 +131,17 @@ const promptSchema = new mongoose.Schema(
       default: null,
     },
     
+    similarityDecisionVersion: {
+      type: Number,
+      default: 1,
+      min: 1,
+      validate: Number.isSafeInteger,
+    },
+    similarityOverrides: {
+      type: [similarityOverrideSchema],
+      default: [],
+    },
+
     // Privacy-preserving fingerprint (no plaintext)
     // Allows efficient similarity scanning without loading full content
     fingerprintVersion: {
