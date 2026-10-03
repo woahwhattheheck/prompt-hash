@@ -42,6 +42,7 @@ export class ServerLifecycle {
   private readonly logger: ServerLifecycleLogger;
   private readonly signals: NodeJS.Signals[];
   private readonly timers = new Set<TimerHandle>();
+  private timersClosed = false;
   private readonly sockets = new Set<Socket>();
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
@@ -79,11 +80,18 @@ export class ServerLifecycle {
 
   /** Register an interval/timeout so shutdown clears it. Returns the same handle. */
   trackTimer(handle: TimerHandle): TimerHandle {
-    this.timers.add(handle);
+    if (this.timersClosed) {
+      clearInterval(handle as NodeJS.Timeout);
+      clearTimeout(handle as NodeJS.Timeout);
+    } else {
+      this.timers.add(handle);
+    }
     return handle;
   }
 
   clearTrackedTimers(): void {
+    // Once shutdown reaches cleanup, late callbacks must not restart timers.
+    if (this.shuttingDown) this.timersClosed = true;
     for (const handle of this.timers) {
       clearInterval(handle as NodeJS.Timeout);
       clearTimeout(handle as NodeJS.Timeout);

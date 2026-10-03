@@ -123,6 +123,56 @@ describe("ServerLifecycle", () => {
     await expect(get(port, "/slow")).rejects.toThrow();
   });
 
+  it.each(["disconnecting", "complete"] as const)(
+    "retires timers registered after shutdown cleanup while %s",
+    async (phase) => {
+      const { server } = await listenEphemeral(express());
+      let beginDisconnect!: () => void;
+      let finishDisconnect!: () => void;
+      const disconnectStarted = new Promise<void>((resolve) => {
+        beginDisconnect = resolve;
+      });
+      const disconnectGate = new Promise<void>((resolve) => {
+        finishDisconnect = resolve;
+      });
+      const lifecycle = new ServerLifecycle({
+        server,
+        shutdownTimeoutMs: 2000,
+        disconnectDb: async () => {
+          beginDisconnect();
+          await disconnectGate;
+        },
+        onForceExit: () => {
+          throw new Error("should not force-exit");
+        },
+        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      });
+
+      const shutdown = lifecycle.shutdown("late-timer-registration");
+      await disconnectStarted;
+      if (phase === "complete") {
+        finishDisconnect();
+        await shutdown;
+      }
+
+      let callbacks = 0;
+      const interval = setInterval(() => { callbacks += 1; }, 5);
+      const timeout = setTimeout(() => { callbacks += 1; }, 5);
+      try {
+        expect(lifecycle.trackTimer(interval)).toBe(interval);
+        expect(lifecycle.trackTimer(timeout)).toBe(timeout);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect({ callbacks, tracked: lifecycle.trackedTimerCount })
+          .toEqual({ callbacks: 0, tracked: 0 });
+      } finally {
+        clearInterval(interval);
+        clearTimeout(timeout);
+        finishDisconnect();
+        await shutdown;
+      }
+    },
+  );
+
   it("force-exits when drain exceeds the shutdown timeout", async () => {
     const app = express();
     app.get("/hang", (_req, res) => {
