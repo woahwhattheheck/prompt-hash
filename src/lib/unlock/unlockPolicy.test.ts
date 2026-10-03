@@ -27,6 +27,7 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
 
   afterEach(() => {
     cache.clear();
+    vi.useRealTimers();
   });
 
   function finder(impl: FindFulfillment): FindFulfillment {
@@ -177,6 +178,73 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
     expect(decision).toEqual({
       outcome: "allow",
       status: null,
+      source: "cache",
+    });
+  });
+
+  it.each(["timeout", "connection error"])(
+    "rejects a snapshot that expires while waiting for a DB %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const options = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        signingSecret: SECRET,
+        cache,
+      };
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        findFulfillment: finder(async () => ({ status: "delivered" })),
+      });
+
+      vi.setSystemTime(now + DEFAULT_POLICY_CACHE_TTL_MS - 1);
+      const pending = evaluateUnlockFulfillmentPolicy({
+        ...options,
+        findFulfillment: finder(
+          () =>
+            new Promise((_resolve, reject) => {
+              if (failure === "connection error") {
+                setTimeout(() => reject(new Error("connection lost")), 25);
+              }
+            }),
+        ),
+        lookupTimeoutMs: failure === "timeout" ? 25 : 100,
+      });
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(await pending).toMatchObject({
+        outcome: "unavailable",
+        message: POLICY_UNAVAILABLE_MESSAGE,
+      });
+    },
+  );
+
+  it("allows a snapshot that remains fresh after the DB wait", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const options = {
+      promptId: PROMPT_ID,
+      buyerWallet: BUYER,
+      signingSecret: SECRET,
+      cache,
+    };
+    await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      findFulfillment: finder(async () => ({ status: "delivered" })),
+    });
+
+    vi.setSystemTime(now + DEFAULT_POLICY_CACHE_TTL_MS - 100);
+    const pending = evaluateUnlockFulfillmentPolicy({
+      ...options,
+      findFulfillment: finder(() => new Promise(() => {})),
+      lookupTimeoutMs: 25,
+    });
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(await pending).toEqual({
+      outcome: "allow",
+      status: "delivered",
       source: "cache",
     });
   });

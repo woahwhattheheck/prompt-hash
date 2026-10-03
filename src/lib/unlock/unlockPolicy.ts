@@ -258,7 +258,8 @@ export async function evaluateUnlockFulfillmentPolicy(
   const buyerWallet = String(opts.buyerWallet).toLowerCase();
   const secret = opts.signingSecret;
   const cache = opts.cache ?? globalUnlockPolicyCache;
-  const now = opts.now ?? Date.now();
+  const injectedNow = opts.now;
+  const now = injectedNow ?? Date.now();
   const ttlMs = opts.ttlMs ?? DEFAULT_POLICY_CACHE_TTL_MS;
   const lookupTimeoutMs = opts.lookupTimeoutMs ?? DEFAULT_LOOKUP_TIMEOUT_MS;
 
@@ -288,7 +289,15 @@ export async function evaluateUnlockFulfillmentPolicy(
     cache.set(promptId, buyerWallet, signPolicySnapshot(snapshot, secret));
     return decisionFromSnapshot(snapshot, "live");
   } catch (err) {
-    const cached = tryCache(promptId, buyerWallet, secret, cache, now, ttlMs);
+    // The snapshot may expire while the live lookup is pending.
+    const cached = tryCache(
+      promptId,
+      buyerWallet,
+      secret,
+      cache,
+      injectedNow ?? Date.now(),
+      ttlMs,
+    );
     if (cached) return cached;
     const cause = err instanceof Error ? err.message : String(err);
     return {
