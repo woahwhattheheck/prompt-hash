@@ -33,6 +33,7 @@ Claims (trusted only after signature verification):
 | any other | No → `403 forbidden` |
 
 Random, expired, revoked, wrong-audience, or unsigned tokens → `401`.
+The expiry instant is exclusive: credentials are valid only while `now < exp`.
 
 ### Revocation
 

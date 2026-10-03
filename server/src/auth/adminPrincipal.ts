@@ -212,7 +212,7 @@ export function verifyAdminPrincipalToken(
     }
   }
 
-  if (claims.exp < now) {
+  if (claims.exp <= now) {
     throw new AdminAuthError("expired_token", "Credentials expired.");
   }
 

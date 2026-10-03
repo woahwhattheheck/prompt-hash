@@ -117,6 +117,25 @@ describe("listPromptReportsForReview", () => {
     expect(mockFind).not.toHaveBeenCalled();
   });
 
+  it("denies and audits an exactly expired reviewer before querying", async () => {
+    const audits: Array<Record<string, unknown>> = [];
+    setReportAccessAuditSink((event) => audits.push(event));
+    const result = await listPromptReportsForReview({
+      authorizationHeader: reviewerBearer({ ttlMs: 1000 }),
+      now: NOW + 1000,
+    });
+    expect(result).toEqual({
+      status: 401,
+      body: { error: "Unauthorized", code: "expired_token" },
+    });
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(audits).toEqual([expect.objectContaining({
+      action: "report_review_denied",
+      result: "denied",
+      reason: "expired_token",
+    })]);
+  });
+
   it("rejects revoked tokens before querying", async () => {
     const auth = reviewerBearer({ jti: "dead-jti" });
     revokeAdminPrincipalToken("dead-jti");

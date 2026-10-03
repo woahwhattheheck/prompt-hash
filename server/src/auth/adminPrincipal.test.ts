@@ -110,6 +110,35 @@ describe("adminPrincipal — issuance / verification", () => {
     }
   });
 
+  it.each([0, 1000])("rejects at the exact expiry instant for TTL %i", (ttlMs) => {
+    const token = signAdminPrincipalToken({
+      sub: "reviewer-1",
+      roles: [REPORT_REVIEWER_ROLE],
+      now: NOW,
+      ttlMs,
+      aud: AUD,
+    });
+    expect(() => verifyAdminPrincipalToken(token, {
+      now: NOW + ttlMs,
+      expectedAud: AUD,
+    })).toThrow(expect.objectContaining({ code: "expired_token" }));
+  });
+
+  it("authorizes the reviewer immediately before expiry", () => {
+    const token = signAdminPrincipalToken({
+      sub: "reviewer-1",
+      roles: [REPORT_REVIEWER_ROLE],
+      now: NOW,
+      ttlMs: 1000,
+      aud: AUD,
+    });
+    expect(authorizeAdminPrincipal(bearer(token), {
+      now: NOW + 999,
+      expectedAud: AUD,
+      requiredRoles: [REPORT_REVIEWER_ROLE],
+    }).sub).toBe("reviewer-1");
+  });
+
   it("rejects revoked tokens (in-process + env denylist)", () => {
     const token = signAdminPrincipalToken({
       sub: "x",
