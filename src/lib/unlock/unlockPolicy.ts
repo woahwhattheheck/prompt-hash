@@ -100,7 +100,9 @@ export function verifyPolicySnapshot(
   } catch {
     return null;
   }
-  const expected = createHmac("sha256", secret).update(body).digest("base64url");
+  const expected = createHmac("sha256", secret)
+    .update(body)
+    .digest("base64url");
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
@@ -122,21 +124,65 @@ export function verifyPolicySnapshot(
 
 export class UnlockPolicyCache {
   private readonly store = new Map<string, string>();
+  private readonly updates = new Map<
+    string,
+    { nextOrder: number; latestPublished: number; pending: number }
+  >();
+
+  /** Order successful lookup writes independently of wall-clock timestamps. */
+  beginSnapshotUpdate(promptId: string, buyerWallet: string) {
+    const key = cacheKey(promptId, buyerWallet);
+    const state = this.updates.get(key) ?? {
+      nextOrder: 0,
+      latestPublished: 0,
+      pending: 0,
+    };
+    this.updates.set(key, state);
+    const order = ++state.nextOrder;
+    state.pending += 1;
+    let finished = false;
+
+    return {
+      publish: (token: string) => {
+        if (
+          !finished &&
+          this.updates.get(key) === state &&
+          order > state.latestPublished
+        ) {
+          state.latestPublished = order;
+          this.store.set(key, token);
+        }
+      },
+      finish: () => {
+        if (finished) return;
+        finished = true;
+        state.pending -= 1;
+        if (state.pending === 0 && this.updates.get(key) === state) {
+          this.updates.delete(key);
+        }
+      },
+    };
+  }
 
   get(promptId: string, buyerWallet: string): string | undefined {
     return this.store.get(cacheKey(promptId, buyerWallet));
   }
 
   set(promptId: string, buyerWallet: string, token: string): void {
-    this.store.set(cacheKey(promptId, buyerWallet), token);
+    const key = cacheKey(promptId, buyerWallet);
+    this.updates.delete(key);
+    this.store.set(key, token);
   }
 
   clear(): void {
     this.store.clear();
+    this.updates.clear();
   }
 
   delete(promptId: string, buyerWallet: string): void {
-    this.store.delete(cacheKey(promptId, buyerWallet));
+    const key = cacheKey(promptId, buyerWallet);
+    this.store.delete(key);
+    this.updates.delete(key);
   }
 }
 
@@ -163,9 +209,11 @@ function decisionFromSnapshot(
   };
 }
 
-function classifyFulfillment(
-  row: FulfillmentStatusRow | null,
-): { decision: "allow" | "deny"; status: string | null; denyReason?: DenyReason } {
+function classifyFulfillment(row: FulfillmentStatusRow | null): {
+  decision: "allow" | "deny";
+  status: string | null;
+  denyReason?: DenyReason;
+} {
   if (!row) {
     return { decision: "allow", status: null };
   }
@@ -271,6 +319,7 @@ export async function evaluateUnlockFulfillmentPolicy(
     };
   }
 
+  const update = cache.beginSnapshotUpdate(promptId, buyerWallet);
   try {
     const row = await withTimeout(
       opts.findFulfillment(promptId, buyerWallet),
@@ -286,7 +335,7 @@ export async function evaluateUnlockFulfillmentPolicy(
       denyReason: classified.denyReason,
       evaluatedAt: now,
     };
-    cache.set(promptId, buyerWallet, signPolicySnapshot(snapshot, secret));
+    update.publish(signPolicySnapshot(snapshot, secret));
     return decisionFromSnapshot(snapshot, "live");
   } catch (err) {
     // The snapshot may expire while the live lookup is pending.
@@ -305,6 +354,8 @@ export async function evaluateUnlockFulfillmentPolicy(
       message: POLICY_UNAVAILABLE_MESSAGE,
       cause,
     };
+  } finally {
+    update.finish();
   }
 }
 

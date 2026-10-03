@@ -275,6 +275,219 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
     }
   });
 
+  it.each([
+    { older: "delivered", newer: "refunded", startOffset: 1 },
+    { older: "delivered", newer: "refund_requested", startOffset: 1 },
+    { older: "refunded", newer: "delivered", startOffset: 1 },
+    { older: "delivered", newer: "refunded", startOffset: 0 },
+    { older: "delivered", newer: "refund_requested", startOffset: 0 },
+    { older: "refunded", newer: "delivered", startOffset: 0 },
+  ])(
+    "retains newer $newer after older $older completes (start offset $startOffset ms)",
+    async ({ older, newer, startOffset }) => {
+      const options = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        signingSecret: SECRET,
+        cache,
+      };
+      let releaseOlder!: () => void;
+      const pendingOlder = evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now,
+        findFulfillment: () =>
+          new Promise((resolve) => {
+            releaseOlder = () => resolve({ status: older });
+          }),
+      });
+
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        buyerWallet: BUYER.toLowerCase(),
+        now: now + startOffset,
+        findFulfillment: async () => ({ status: newer }),
+      });
+      const newerToken = cache.get(PROMPT_ID, BUYER);
+      expect(verifyPolicySnapshot(newerToken!, SECRET)).toMatchObject({
+        status: newer,
+        evaluatedAt: now + startOffset,
+      });
+
+      releaseOlder();
+      expect(await pendingOlder).toMatchObject({
+        status: older,
+        source: "live",
+      });
+      expect(cache.get(PROMPT_ID, BUYER)).toBe(newerToken);
+
+      const fallback = await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now: now + 2,
+        findFulfillment: async () => {
+          throw new Error("connection lost");
+        },
+      });
+      expect(fallback).toMatchObject({
+        outcome: newer === "delivered" ? "allow" : "deny",
+        status: newer,
+        source: "cache",
+      });
+    },
+  );
+
+  it.each(["before", "after"])(
+    "keeps a successful lookup when a newer lookup fails %s it completes",
+    async (failureOrder) => {
+      const options = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        signingSecret: SECRET,
+        cache,
+      };
+      let releaseOlder!: () => void;
+      let rejectNewer!: () => void;
+      const pendingOlder = evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now,
+        findFulfillment: () =>
+          new Promise((resolve) => {
+            releaseOlder = () => resolve({ status: "refunded" });
+          }),
+      });
+      const pendingNewer = evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now: now + 1,
+        findFulfillment: () =>
+          new Promise((_resolve, reject) => {
+            rejectNewer = () => reject(new Error("connection lost"));
+          }),
+      });
+
+      if (failureOrder === "before") {
+        rejectNewer();
+        expect((await pendingNewer).outcome).toBe("unavailable");
+        releaseOlder();
+        await pendingOlder;
+      } else {
+        releaseOlder();
+        await pendingOlder;
+        rejectNewer();
+        expect(await pendingNewer).toMatchObject({
+          outcome: "deny",
+          status: "refunded",
+          source: "cache",
+        });
+      }
+      expect(
+        verifyPolicySnapshot(cache.get(PROMPT_ID, BUYER)!, SECRET),
+      ).toMatchObject({ status: "refunded", evaluatedAt: now });
+
+      const fallback = await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now: now + 2,
+        findFulfillment: async () => {
+          throw new Error("still disconnected");
+        },
+      });
+      expect(fallback).toMatchObject({
+        outcome: "deny",
+        status: "refunded",
+        source: "cache",
+      });
+    },
+  );
+
+  it("orders overlapping lookups independently for each prompt and buyer", async () => {
+    const options = {
+      promptId: PROMPT_ID,
+      buyerWallet: BUYER,
+      signingSecret: SECRET,
+      cache,
+      now,
+    };
+    let releaseOlder!: () => void;
+    const pendingOlder = evaluateUnlockFulfillmentPolicy({
+      ...options,
+      findFulfillment: () =>
+        new Promise((resolve) => {
+          releaseOlder = () => resolve({ status: "refunded" });
+        }),
+    });
+    await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      buyerWallet: "GOTHERBUYER",
+      findFulfillment: async () => ({ status: "delivered" }),
+    });
+    releaseOlder();
+    await pendingOlder;
+    expect(
+      verifyPolicySnapshot(cache.get(PROMPT_ID, BUYER)!, SECRET),
+    ).toMatchObject({ status: "refunded" });
+    expect(
+      verifyPolicySnapshot(cache.get(PROMPT_ID, "GOTHERBUYER")!, SECRET),
+    ).toMatchObject({ status: "delivered" });
+  });
+
+  it.each(["clear", "delete", "set"] as const)(
+    "does not overwrite an explicit cache %s with an already-pending lookup",
+    async (mutation) => {
+      const options = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        signingSecret: SECRET,
+        cache,
+      };
+      let releaseOlder!: () => void;
+      const pendingOlder = evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now,
+        findFulfillment: () =>
+          new Promise((resolve) => {
+            releaseOlder = () => resolve({ status: "delivered" });
+          }),
+      });
+      const replacement = signPolicySnapshot(
+        {
+          promptId: PROMPT_ID,
+          buyerWallet: BUYER,
+          decision: "deny",
+          status: "refunded",
+          denyReason: "refunded",
+          evaluatedAt: now + 1,
+        },
+        SECRET,
+      );
+      if (mutation === "clear") cache.clear();
+      else if (mutation === "delete") cache.delete(PROMPT_ID, BUYER);
+      else cache.set(PROMPT_ID, BUYER, replacement);
+
+      releaseOlder();
+      await pendingOlder;
+      expect(cache.get(PROMPT_ID, BUYER)).toBe(
+        mutation === "set" ? replacement : undefined,
+      );
+      const fallback = await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now: now + 2,
+        findFulfillment: async () => {
+          throw new Error("connection lost");
+        },
+      });
+      expect(fallback.outcome).toBe(
+        mutation === "set" ? "deny" : "unavailable",
+      );
+
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now: now + 3,
+        findFulfillment: async () => ({ status: "delivered" }),
+      });
+      expect(
+        verifyPolicySnapshot(cache.get(PROMPT_ID, BUYER)!, SECRET),
+      ).toMatchObject({ status: "delivered", evaluatedAt: now + 3 });
+    },
+  );
+
   it("rejects tampered cache signatures", () => {
     const payload: PolicySnapshotPayload = {
       promptId: PROMPT_ID,
