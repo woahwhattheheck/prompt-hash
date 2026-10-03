@@ -60,6 +60,32 @@ describe("platformFeeStroops (contract DEFAULT_FEE_BPS)", () => {
     // 20 stroops * 500 / 10000 = 1
     expect(fee(20)).toBe(1);
   });
+
+  it.each([
+    [0, 0],
+    [1, 900_719_925_472],
+    [500, 450_359_962_736_049],
+    [3333, 3_002_099_511_598_508],
+    [9999, 9_006_298_534_795_526],
+    [10000, 9_007_199_254_720_999],
+  ])("keeps exact contract division for a large amount at %i bps", (bps, expected) => {
+    // Gross is a safe integer, but gross * bps can exceed Number's exact range.
+    expect(platformFeeStroops(9_007_199_254_720_999, bps)).toBe(expected);
+  });
+
+  it.each([-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects a gross amount outside nonnegative safe integer stroops: %s",
+    (gross) => {
+      expect(() => platformFeeStroops(gross)).toThrow(RangeError);
+    },
+  );
+
+  it.each([-1, 0.5, NaN, Infinity, MAX_BPS + 1])(
+    "rejects a fee outside the contract's integer basis-point range: %s",
+    (bps) => {
+      expect(() => platformFeeStroops(100_000_000, bps)).toThrow(RangeError);
+    },
+  );
 });
 
 describe("reconcilePayoutStatement — balance invariant", () => {
@@ -157,6 +183,39 @@ describe("reconcilePayoutStatement — balance invariant", () => {
         statement.refundSellerDebitStroops +
         statement.previousBalanceCarryoverStroops,
     );
+  });
+
+  it("retains exact large sale and refund fees in statement exports", () => {
+    const gross = 9_007_199_254_720_999;
+    const statement = reconcilePayoutStatement({
+      sellerWallet: "GSELLER",
+      period,
+      purchases: [{
+        purchaseId: "large-sale",
+        promptId: "10",
+        buyerWallet: "gbuyer",
+        grossStroops: gross,
+        purchasedAt: "2026-01-10T12:00:00.000Z",
+      }],
+      refunds: [{
+        purchaseId: "large-sale",
+        promptId: "10",
+        originalGrossStroops: gross,
+        refundedAt: "2026-01-20T12:00:00.000Z",
+        originalPurchasedAt: "2026-01-10T12:00:00.000Z",
+      }],
+      statementId: "stmt_large_refund",
+      generatedAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    expect(statement.platformFeeStroops).toBe(450_359_962_736_049);
+    expect(statement.refunds[0].feeReversalStroops).toBe(450_359_962_736_049);
+    expect(statement.refundSellerDebitStroops).toBe(8_556_839_291_984_950);
+    expect(statement.netSettlementStroops).toBe(0);
+    expect(JSON.parse(exportStatementToJson(statement)).platformFeeStroops)
+      .toBe(450_359_962_736_049);
+    expect(exportStatementToCsv(statement))
+      .toContain("summary,platformFeeStroops,450359962736049");
   });
 
   it("applies previousBalanceCarryover to the balance identity", () => {

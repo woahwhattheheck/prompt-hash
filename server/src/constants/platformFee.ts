@@ -24,14 +24,21 @@ export const STROOPS_PER_XLM = 10_000_000;
 /**
  * Floor-rounded fee in stroops, matching `bps_amount` in
  * contracts/prompt-hash/src/contract.rs.
+ * Inputs must fit the statement's integer Number fields and the contract's
+ * 0..MAX_BPS fee range. Multiply as integers before dividing so a safe gross
+ * amount does not lose stroops when its intermediate product exceeds 2^53.
  */
 export function platformFeeStroops(
   grossStroops: number,
   feeBps: number = DEFAULT_FEE_BPS,
 ): number {
-  if (!Number.isFinite(grossStroops) || grossStroops <= 0) return 0;
-  if (!Number.isFinite(feeBps) || feeBps < 0) return 0;
-  return Math.floor((grossStroops * feeBps) / MAX_BPS);
+  if (!Number.isSafeInteger(grossStroops) || grossStroops < 0) {
+    throw new RangeError("grossStroops must be a nonnegative safe integer");
+  }
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > MAX_BPS) {
+    throw new RangeError(`feeBps must be an integer between 0 and ${MAX_BPS}`);
+  }
+  return Number((BigInt(grossStroops) * BigInt(feeBps)) / BigInt(MAX_BPS));
 }
 
 /** Convert an XLM price (Prompt.price) to integer stroops. */
