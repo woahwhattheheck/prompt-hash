@@ -6,6 +6,7 @@ jest.mock("redis", () => ({
 
 import {
   __resetCacheForTests,
+  CACHE_KEYS,
   cacheDel,
   cacheDelPattern,
   cacheGetOrLoad,
@@ -79,46 +80,78 @@ describe("cache reliability", () => {
 
   it("distinguishes bypass, miss, and hit outcomes", async () => {
     delete process.env.REDIS_URL;
-    await expect(cacheRead("key")).resolves.toEqual({ status: "bypass", value: null });
+    await expect(cacheRead("key")).resolves.toEqual({
+      status: "bypass",
+      value: null,
+    });
 
     process.env.REDIS_URL = "redis://fixture";
-    const client = redisClient({ get: jest.fn().mockResolvedValueOnce(null).mockResolvedValue("v") });
+    const client = redisClient({
+      get: jest.fn().mockResolvedValueOnce(null).mockResolvedValue("v"),
+    });
     createClient.mockReturnValue(client);
 
-    await expect(cacheRead("key")).resolves.toEqual({ status: "miss", value: null });
-    await expect(cacheRead("key")).resolves.toEqual({ status: "hit", value: "v" });
+    await expect(cacheRead("key")).resolves.toEqual({
+      status: "miss",
+      value: null,
+    });
+    await expect(cacheRead("key")).resolves.toEqual({
+      status: "hit",
+      value: "v",
+    });
   });
 
   it("reports a failed connection safely and recovers with a fresh client", async () => {
     const now = jest.spyOn(Date, "now").mockReturnValue(10_000);
-    const failure = Object.assign(new Error("sentinel-secret"), { code: "ECONNREFUSED" });
-    const failedClient = redisClient({ connect: jest.fn().mockRejectedValue(failure) });
-    const recoveredClient = redisClient({ get: jest.fn().mockResolvedValue("recovered") });
-    createClient.mockReturnValueOnce(failedClient).mockReturnValueOnce(recoveredClient);
+    const failure = Object.assign(new Error("sentinel-secret"), {
+      code: "ECONNREFUSED",
+    });
+    const failedClient = redisClient({
+      connect: jest.fn().mockRejectedValue(failure),
+    });
+    const recoveredClient = redisClient({
+      get: jest.fn().mockResolvedValue("recovered"),
+    });
+    createClient
+      .mockReturnValueOnce(failedClient)
+      .mockReturnValueOnce(recoveredClient);
 
-    await expect(cacheRead("key")).resolves.toEqual({ status: "unavailable", value: null });
+    await expect(cacheRead("key")).resolves.toEqual({
+      status: "unavailable",
+      value: null,
+    });
     expect(console.warn).toHaveBeenCalledWith("[cache] unavailable", {
       operation: "connect",
       status: "unavailable",
       code: "ECONNREFUSED",
     });
-    expect(JSON.stringify((console.warn as jest.Mock).mock.calls)).not.toContain("sentinel-secret");
+    expect(
+      JSON.stringify((console.warn as jest.Mock).mock.calls),
+    ).not.toContain("sentinel-secret");
     expect(failedClient.destroy).toHaveBeenCalledTimes(1);
 
     now.mockReturnValue(11_001);
-    await expect(cacheRead("key")).resolves.toEqual({ status: "hit", value: "recovered" });
+    await expect(cacheRead("key")).resolves.toEqual({
+      status: "hit",
+      value: "recovered",
+    });
     expect(createClient).toHaveBeenCalledTimes(2);
   });
 
   it("bounds a stalled command and marks the cache unavailable", async () => {
     jest.useFakeTimers();
-    const client = redisClient({ get: jest.fn(() => new Promise<string>(() => undefined)) });
+    const client = redisClient({
+      get: jest.fn(() => new Promise<string>(() => undefined)),
+    });
     createClient.mockReturnValue(client);
 
     const result = cacheRead("key");
     await jest.advanceTimersByTimeAsync(251);
 
-    await expect(result).resolves.toEqual({ status: "unavailable", value: null });
+    await expect(result).resolves.toEqual({
+      status: "unavailable",
+      value: null,
+    });
     expect(console.warn).toHaveBeenCalledWith("[cache] unavailable", {
       operation: "get",
       status: "unavailable",
@@ -128,7 +161,9 @@ describe("cache reliability", () => {
   });
 
   it("single-flights concurrent fallback loads during an outage", async () => {
-    const client = redisClient({ get: jest.fn().mockRejectedValue(new Error("offline")) });
+    const client = redisClient({
+      get: jest.fn().mockRejectedValue(new Error("offline")),
+    });
     createClient.mockReturnValue(client);
     const loaded = deferred<{ id: number }[]>();
     const loader = jest.fn(() => loaded.promise);
@@ -139,7 +174,10 @@ describe("cache reliability", () => {
 
     expect(loader).toHaveBeenCalledTimes(1);
     loaded.resolve([{ id: 1 }]);
-    await expect(Promise.all([first, second])).resolves.toEqual([[{ id: 1 }], [{ id: 1 }]]);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      [{ id: 1 }],
+      [{ id: 1 }],
+    ]);
   });
 
   it("fences an in-flight load when its key pattern is invalidated", async () => {
@@ -164,15 +202,58 @@ describe("cache reliability", () => {
     await expect(first).resolves.toEqual([{ id: 1 }]);
     await expect(second).resolves.toEqual([{ id: 2 }]);
     expect(client.set).toHaveBeenCalledTimes(1);
-    expect(client.set).toHaveBeenCalledWith(
-      "prompts:list:all",
-      '[{"id":2}]',
-      { EX: 60 },
-    );
+    expect(client.set).toHaveBeenCalledWith("prompts:list:all", '[{"id":2}]', {
+      EX: 60,
+    });
   });
 
+  it.each([
+    { label: "LF", separator: "\n" },
+    { label: "CR", separator: "\r" },
+    { label: "U+2028", separator: "\u2028" },
+    { label: "U+2029", separator: "\u2029" },
+  ])(
+    "fences decoded $label in list query keys without invalidating search loads",
+    async ({ separator }) => {
+      const client = redisClient();
+      createClient.mockReturnValue(client);
+      const url = new URL(
+        `https://local.invalid/api/prompts?walletAddress=${encodeURIComponent(`local${separator}wallet`)}`,
+      );
+      const query = `cat=&wallet=${url.searchParams.get("walletAddress")}`;
+      const key = CACHE_KEYS.promptList(query);
+      const unrelatedKey = CACHE_KEYS.promptSearch(query);
+      const stale = deferred<number>();
+      const fresh = deferred<number>();
+      const unrelated = deferred<number>();
+      const freshLoader = jest.fn(() => fresh.promise);
+      const unrelatedLoader = jest.fn(() => unrelated.promise);
+
+      const first = cacheGetOrLoad(key, () => stale.promise);
+      const other = cacheGetOrLoad(unrelatedKey, unrelatedLoader);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await cacheDelPattern("prompts:list:*");
+      const second = cacheGetOrLoad(key, freshLoader);
+      const otherAgain = cacheGetOrLoad(unrelatedKey, unrelatedLoader);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      stale.resolve(1);
+      fresh.resolve(2);
+      unrelated.resolve(3);
+      const values = await Promise.all([first, second, other, otherAgain]);
+      expect(freshLoader).toHaveBeenCalledTimes(1);
+      expect(unrelatedLoader).toHaveBeenCalledTimes(1);
+      expect(values).toEqual([1, 2, 3, 3]);
+      expect(client.set).toHaveBeenCalledTimes(2);
+      expect(client.set).toHaveBeenCalledWith(key, "2", { EX: 60 });
+      expect(client.set).toHaveBeenCalledWith(unrelatedKey, "3", { EX: 60 });
+    },
+  );
+
   it("returns parsed cached values without invoking the loader", async () => {
-    const client = redisClient({ get: jest.fn().mockResolvedValue('[{"id":2}]') });
+    const client = redisClient({
+      get: jest.fn().mockResolvedValue('[{"id":2}]'),
+    });
     createClient.mockReturnValue(client);
     const loader = jest.fn().mockResolvedValue([{ id: 3 }]);
 
@@ -233,27 +314,34 @@ describe("cache reliability", () => {
     secondValue.resolve(2);
     firstValue.resolve(1);
     unrelatedValue.resolve(4);
-    await expect(Promise.all([first, second, unrelated, unrelatedAgain]))
-      .resolves.toEqual([1, 2, 4, 4]);
+    await expect(
+      Promise.all([first, second, unrelated, unrelatedAgain]),
+    ).resolves.toEqual([1, 2, 4, 4]);
     expect(client.set).toHaveBeenCalledTimes(2);
     expect(client.set).toHaveBeenCalledWith(key, "3", { EX: 60 });
-    expect(client.set).toHaveBeenCalledWith("prompts:detail:17", "4", { EX: 60 });
-  });
-
-  it.each(["key", "pattern"])("fences synchronous %s invalidation inside the loader", async (kind) => {
-    const client = redisClient();
-    createClient.mockReturnValue(client);
-    const key = "prompts:list:all";
-    let invalidation: Promise<void> | undefined;
-    const result = cacheGetOrLoad(key, () => {
-      invalidation = kind === "key" ? cacheDel(key) : cacheDelPattern("prompts:list:*");
-      return Promise.resolve(1);
+    expect(client.set).toHaveBeenCalledWith("prompts:detail:17", "4", {
+      EX: 60,
     });
-
-    await expect(result).resolves.toBe(1);
-    await invalidation;
-    expect(client.set).not.toHaveBeenCalled();
   });
+
+  it.each(["key", "pattern"])(
+    "fences synchronous %s invalidation inside the loader",
+    async (kind) => {
+      const client = redisClient();
+      createClient.mockReturnValue(client);
+      const key = "prompts:list:all";
+      let invalidation: Promise<void> | undefined;
+      const result = cacheGetOrLoad(key, () => {
+        invalidation =
+          kind === "key" ? cacheDel(key) : cacheDelPattern("prompts:list:*");
+        return Promise.resolve(1);
+      });
+
+      await expect(result).resolves.toBe(1);
+      await invalidation;
+      expect(client.set).not.toHaveBeenCalled();
+    },
+  );
 
   it("releases rejected shared loads so the next caller can retry", async () => {
     const client = redisClient();
@@ -266,10 +354,17 @@ describe("cache reliability", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(loader).toHaveBeenCalledTimes(1);
     failedValue.reject(new Error("source unavailable"));
-    expect((await settled).map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    expect((await settled).map((result) => result.status)).toEqual([
+      "rejected",
+      "rejected",
+    ]);
 
-    await expect(cacheGetOrLoad("prompts:detail:17", () => Promise.resolve(2))).resolves.toBe(2);
+    await expect(
+      cacheGetOrLoad("prompts:detail:17", () => Promise.resolve(2)),
+    ).resolves.toBe(2);
     expect(client.set).toHaveBeenCalledTimes(1);
-    expect(client.set).toHaveBeenCalledWith("prompts:detail:17", "2", { EX: 60 });
+    expect(client.set).toHaveBeenCalledWith("prompts:detail:17", "2", {
+      EX: 60,
+    });
   });
 });

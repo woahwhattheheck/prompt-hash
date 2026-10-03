@@ -21,6 +21,8 @@ Invalidation state belongs to outstanding loads. Exact-key invalidation marks th
 
 The pending entry is registered before invoking the loader, including a loader that invalidates synchronously. Rejected loads release their entry for a later retry. The current application uses the two fixed list/search patterns above; exact-key invalidation can see a new detail key for every prompt ID.
 
+The `*` wildcard also spans line separators in decoded query values: LF, CR, U+2028 and U+2029. These list keys receive the same invalidation fence, so a later caller starts a fresh load and the older result cannot repopulate the cache. Loads under an unrelated prefix remain shared.
+
 This is an in-process loader fence. It does not make Redis invalidation and population an atomic transaction or change the handling of a read that already returned a cached value.
 
 ## Repeatable bookkeeping benchmark
@@ -35,11 +37,11 @@ Optional positional arguments set distinct-key history and load counts, for exam
 
 Observed on Node 24.19.0 on October 3, 2026, medians of three fresh processes with 100,000 distinct prompt-detail invalidations, the two production patterns, and 20,000 completed loads:
 
-| Measurement | Baseline `1df7748` | In-flight tracking |
-| --- | ---: | ---: |
-| Retained heap after invalidation history | 9,255,992 bytes | -10,504 bytes (GC noise around zero) |
-| Time for 20,000 fallback loads | 106.33 ms | 47.95 ms |
-| Pattern invalidation with 1,000 pending loads | 0.034 ms | 0.387 ms |
+| Measurement                                   | Baseline `1df7748` |                   In-flight tracking |
+| --------------------------------------------- | -----------------: | -----------------------------------: |
+| Retained heap after invalidation history      |    9,255,992 bytes | -10,504 bytes (GC noise around zero) |
+| Time for 20,000 fallback loads                |          106.33 ms |                             47.95 ms |
+| Pattern invalidation with 1,000 pending loads |           0.034 ms |                             0.387 ms |
 
 The pending-load sample has equal numbers of matching list keys and unrelated detail keys. The measured load loop was 2.22 times faster, while pattern work moved into the invalidation call and scales with current pending loads. The removal of lifetime history does not bound the number of requests an application may leave outstanding. These are local component observations; deployed latency and hosted CI remain separate.
 

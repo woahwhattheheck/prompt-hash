@@ -76,7 +76,7 @@ function invalidateKeys(keys: string[]): void {
 function invalidatePattern(pattern: string): void {
   if (!inFlightLoads.size) return;
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  const expression = new RegExp(`^${escaped.replace(/\*/g, ".*")}$`);
+  const expression = new RegExp(`^${escaped.replace(/\*/g, ".*")}$`, "s");
   for (const [key, load] of inFlightLoads) {
     if (expression.test(key)) load.invalidated = true;
   }
@@ -86,7 +86,9 @@ function cursorIsDone(cursor: string | number): boolean {
   return cursor === 0 || cursor === "0";
 }
 
-function normalizeCursor(cursor: string | number | { toString(): string }): string {
+function normalizeCursor(
+  cursor: string | number | { toString(): string },
+): string {
   if (typeof cursor === "number") return String(cursor);
   if (typeof cursor === "string") return cursor;
   return String(cursor);
@@ -98,7 +100,10 @@ async function withTimeout<T>(operation: Promise<T>): Promise<T> {
     return await Promise.race([
       operation,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new CacheTimeoutError()), COMMAND_TIMEOUT_MS);
+        timeout = setTimeout(
+          () => reject(new CacheTimeoutError()),
+          COMMAND_TIMEOUT_MS,
+        );
       }),
     ]);
   } finally {
@@ -106,7 +111,11 @@ async function withTimeout<T>(operation: Promise<T>): Promise<T> {
   }
 }
 
-function invalidate(activeClient: RedisClientType, operation: CacheOperation, error: unknown): void {
+function invalidate(
+  activeClient: RedisClientType,
+  operation: CacheOperation,
+  error: unknown,
+): void {
   if (client === activeClient) client = null;
   try {
     activeClient.destroy();
@@ -123,7 +132,9 @@ async function getClient(): Promise<RedisClientType | null> {
   if (Date.now() < unavailableUntil) return null;
   if (initialization) return initialization;
 
-  const candidate = createClient({ url: process.env.REDIS_URL }) as RedisClientType;
+  const candidate = createClient({
+    url: process.env.REDIS_URL,
+  }) as RedisClientType;
   const version = lifecycleVersion;
   initializingClient = candidate;
   candidate.on("error", (error) => invalidate(candidate, "connect", error));
@@ -159,7 +170,9 @@ export async function cacheRead(key: string): Promise<CacheReadResult> {
     activeClient = await getClient();
     if (!activeClient) return { status: "unavailable", value: null };
     const value = await withTimeout(activeClient.get(key));
-    return value === null ? { status: "miss", value: null } : { status: "hit", value };
+    return value === null
+      ? { status: "miss", value: null }
+      : { status: "hit", value };
   } catch (error) {
     if (activeClient) invalidate(activeClient, "get", error);
     return { status: "unavailable", value: null };
