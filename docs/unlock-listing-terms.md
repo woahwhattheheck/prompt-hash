@@ -9,20 +9,20 @@ Unlock challenges bind an immutable **listing quote** so a buyer cannot sign aft
 ## Flow
 
 1. `POST /api/auth/challenge` resolves the live listing quote and embeds `termsHash` (+ quote fields) into the signed challenge payload and human-readable message.
-2. Client re-fetches `GET /api/prompts/version?promptId=&quote=1` **before** wallet `signMessage`. Any drift throws `TERMS_CHANGED` and blocks signing.
+2. Client re-fetches `GET /api/prompts/version?promptId=&quote=1` **before** wallet `signMessage`. Any drift throws `TERMS_CHANGED` and blocks signing. Immediately before signing, it also checks challenge expiry using the same `expiresAt < Date.now()` rule as the server. An expired response or a quote refresh that outlives the challenge reports the existing expired-session retry message without calling the wallet or posting an unlock request.
 3. `POST /api/prompts/unlock` re-resolves the quote and refuses with `409 TERMS_CHANGED` (plus refreshed `quote` + `changes`) if terms no longer match.
 
 ## Quote fields
 
-| Field | Meaning |
-| --- | --- |
-| `promptId` | Listing id |
-| `versionIndex` | Current prompt version |
-| `priceStroops` | Price in stroops (string) |
-| `asset` | Payment asset contract id |
-| `seller` | Creator wallet |
-| `active` | Listing availability |
-| `termsHash` | SHA-256 of the canonical tuple |
+| Field          | Meaning                        |
+| -------------- | ------------------------------ |
+| `promptId`     | Listing id                     |
+| `versionIndex` | Current prompt version         |
+| `priceStroops` | Price in stroops (string)      |
+| `asset`        | Payment asset contract id      |
+| `seller`       | Creator wallet                 |
+| `active`       | Listing availability           |
+| `termsHash`    | SHA-256 of the canonical tuple |
 
 ## UI
 
@@ -43,3 +43,9 @@ Unlock challenges bind an immutable **listing quote** so a buyer cannot sign aft
 ```bash
 npm run test:listing-terms
 ```
+
+The existing client tests cover expiry while receiving the challenge and while
+refreshing an unchanged quote: neither path may sign or post to the unlock API.
+The matching-quote control remains valid one millisecond before expiry. Server
+verification remains authoritative if the challenge expires later while the user
+interacts with the wallet; its expiry policy and signed message are unchanged.

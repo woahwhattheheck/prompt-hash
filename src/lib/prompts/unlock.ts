@@ -6,7 +6,9 @@ import {
   type ListingQuote,
 } from "@/lib/auth/listingTerms";
 
-type SignMessageFn = (_message: string) => Promise<{ signedMessage?: string } | string>;
+type SignMessageFn = (
+  _message: string,
+) => Promise<{ signedMessage?: string } | string>;
 
 export interface UnlockResult {
   promptId: string;
@@ -24,16 +26,27 @@ async function parseApiError(response: Response): Promise<string> {
     | { error?: string; requestId?: string }
     | null;
 
-  if (payload && typeof payload === "object" && "code" in payload && payload.code) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "code" in payload &&
+    payload.code
+  ) {
     const code = payload.code as keyof typeof ERROR_MESSAGES;
-    let baseMsg = ERROR_MESSAGES[code] ?? payload.error ?? "Failed to unlock prompt.";
+    let baseMsg =
+      ERROR_MESSAGES[code] ?? payload.error ?? "Failed to unlock prompt.";
     if (payload.requestId) {
       baseMsg += ` (Support Ref: ${payload.requestId})`;
     }
     return baseMsg;
   }
 
-  if (payload && typeof payload === "object" && "error" in payload && payload.error) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    payload.error
+  ) {
     let baseMsg = String(payload.error);
     if (payload.requestId) {
       baseMsg += ` (Support Ref: ${payload.requestId})`;
@@ -56,8 +69,14 @@ function extractSignedMessage(
   return signature.signedMessage;
 }
 
-async function requestChallenge(address: string, promptId: string, correlationId?: string) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+async function requestChallenge(
+  address: string,
+  promptId: string,
+  correlationId?: string,
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (correlationId) {
     headers["X-Request-ID"] = correlationId;
     headers["X-Correlation-ID"] = correlationId;
@@ -70,17 +89,21 @@ async function requestChallenge(address: string, promptId: string, correlationId
   });
 
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+    const body = (await response
+      .json()
+      .catch(() => null)) as ApiErrorResponse | null;
     if (body?.code === "TERMS_CHANGED" && body.quote) {
       throw new ListingTermsChangedError(
-        (body.changes as import("@/lib/auth/listingTerms").ListingTermsChange[]) ?? ["active"],
+        (body.changes as import("@/lib/auth/listingTerms").ListingTermsChange[]) ?? [
+          "active",
+        ],
         body.quote as ListingQuote,
       );
     }
     throw new Error(
       body?.code && ERROR_MESSAGES[body.code]
         ? ERROR_MESSAGES[body.code]
-        : body?.error ?? "Failed to unlock prompt.",
+        : (body?.error ?? "Failed to unlock prompt."),
     );
   }
 
@@ -96,7 +119,9 @@ async function requestChallenge(address: string, promptId: string, correlationId
 /**
  * Re-fetch the public listing quote used for the pre-sign stale check (#239).
  */
-export async function fetchListingQuote(promptId: string): Promise<ListingQuote> {
+export async function fetchListingQuote(
+  promptId: string,
+): Promise<ListingQuote> {
   const response = await fetch(
     `/api/prompts/version?promptId=${encodeURIComponent(promptId)}&quote=1`,
   );
@@ -120,7 +145,10 @@ export function assertQuoteFresh(
 ): void {
   const changes = diffListingTerms(bound, live);
   if (changes.length > 0 || bound.termsHash !== live.termsHash) {
-    throw new ListingTermsChangedError(changes.length ? changes : ["price"], live);
+    throw new ListingTermsChangedError(
+      changes.length ? changes : ["price"],
+      live,
+    );
   }
 }
 
@@ -133,7 +161,9 @@ async function requestUnlock(
   },
   correlationId?: string,
 ) {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (correlationId) {
     headers["X-Request-ID"] = correlationId;
     headers["X-Correlation-ID"] = correlationId;
@@ -146,17 +176,23 @@ async function requestUnlock(
   });
 
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as ApiErrorResponse | null;
+    const body = (await response
+      .json()
+      .catch(() => null)) as ApiErrorResponse | null;
     if (body?.code === "TERMS_CHANGED" && body.quote) {
       throw new ListingTermsChangedError(
-        (body.changes as import("@/lib/auth/listingTerms").ListingTermsChange[]) ?? ["price"],
+        (body.changes as import("@/lib/auth/listingTerms").ListingTermsChange[]) ?? [
+          "price",
+        ],
         body.quote as ListingQuote,
       );
     }
     if (body?.code && ERROR_MESSAGES[body.code]) {
       throw new Error(ERROR_MESSAGES[body.code]);
     }
-    throw new Error(body?.error ? String(body.error) : "Failed to unlock prompt.");
+    throw new Error(
+      body?.error ? String(body.error) : "Failed to unlock prompt.",
+    );
   }
 
   return response.json() as Promise<{
@@ -184,9 +220,14 @@ export async function unlockPromptContent(
   const correlationId =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
-      : "f-" + Math.random().toString(36).substring(2, 15) + "-" + Date.now().toString(36);
+      : "f-" +
+        Math.random().toString(36).substring(2, 15) +
+        "-" +
+        Date.now().toString(36);
 
-  console.log(`[Unlock Flow] Started for Prompt ID ${id} with Correlation ID: ${correlationId}`);
+  console.log(
+    `[Unlock Flow] Started for Prompt ID ${id} with Correlation ID: ${correlationId}`,
+  );
 
   const challenge = await requestChallenge(address, id, correlationId);
 
@@ -196,6 +237,12 @@ export async function unlockPromptContent(
     assertQuoteFresh(challenge.quote, liveQuote);
   }
 
+  // Quote refresh can outlive the challenge. Match the server's expiry rule
+  // immediately before asking the wallet to sign.
+  if (challenge.expiresAt < Date.now()) {
+    throw new Error(ERROR_MESSAGES.CHALLENGE_EXPIRED);
+  }
+
   const signature = await signMessage(challenge.challenge);
 
   if (!signature) {
@@ -203,15 +250,21 @@ export async function unlockPromptContent(
   }
 
   const signedMessage = extractSignedMessage(signature);
-  const unlocked = await requestUnlock({
-    token: challenge.token,
-    promptId: id,
-    address,
-    signedMessage,
-  }, correlationId);
+  const unlocked = await requestUnlock(
+    {
+      token: challenge.token,
+      promptId: id,
+      address,
+      signedMessage,
+    },
+    correlationId,
+  );
 
   const recomputedHash = await hashPromptPlaintext(unlocked.plaintext);
-  if (unlocked.contentHash && recomputedHash !== unlocked.contentHash.toLowerCase()) {
+  if (
+    unlocked.contentHash &&
+    recomputedHash !== unlocked.contentHash.toLowerCase()
+  ) {
     throw new Error(ERROR_MESSAGES.INTEGRITY_FAILURE);
   }
 
