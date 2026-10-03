@@ -323,7 +323,7 @@ export function verifyCreatorSessionToken(
     throw new CreatorSessionError("invalid_token", "Invalid session token.");
   }
 
-  if (claims.exp < now) {
+  if (claims.exp <= now) {
     throw new CreatorSessionError("expired_token", "Session expired.");
   }
 

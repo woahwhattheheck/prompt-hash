@@ -175,6 +175,63 @@ describe("createCreatorSessionToken / verifyCreatorSessionToken", () => {
 });
 
 describe("authenticateCreatorSession", () => {
+  it("rejects a signed session at expiry before consuming its nonce", () => {
+    const kp = Keypair.random();
+    const ledger = new SessionNonceLedger();
+    const consume = jest.spyOn(ledger, "consume");
+    const issued = createCreatorSessionToken({
+      address: kp.publicKey(),
+      action: CREATOR_OWNED_READ,
+      network: NETWORK,
+      secret: SECRET,
+      now: NOW,
+    });
+
+    expect(() =>
+      authenticateCreatorSession({
+        sessionToken: issued.sessionToken,
+        signature: signMessage(kp, issued.challenge),
+        expectedAction: CREATOR_OWNED_READ,
+        expectedWallet: kp.publicKey(),
+        secret: SECRET,
+        now: issued.expiresAt,
+        ledger,
+      }),
+    ).toThrow(expect.objectContaining({ code: "expired_token" }));
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it("accepts a signed session one millisecond before expiry", () => {
+    const kp = Keypair.random();
+    const ledger = new SessionNonceLedger();
+    const consume = jest.spyOn(ledger, "consume");
+    const issued = createCreatorSessionToken({
+      address: kp.publicKey(),
+      action: CREATOR_OWNED_READ,
+      network: NETWORK,
+      secret: SECRET,
+      now: NOW,
+    });
+
+    const session = authenticateCreatorSession({
+      sessionToken: issued.sessionToken,
+      signature: signMessage(kp, issued.challenge),
+      expectedAction: CREATOR_OWNED_READ,
+      expectedWallet: kp.publicKey(),
+      secret: SECRET,
+      now: issued.expiresAt - 1,
+      ledger,
+    });
+
+    expect(session.address).toBe(kp.publicKey().toLowerCase());
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(consume).toHaveBeenCalledWith(
+      issued.nonce,
+      issued.expiresAt,
+      issued.expiresAt - 1,
+    );
+  });
+
   it("valid creator: signature + nonce accepted once", () => {
     const kp = Keypair.random();
     const ledger = new SessionNonceLedger();

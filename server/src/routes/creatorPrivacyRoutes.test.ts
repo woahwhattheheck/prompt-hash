@@ -379,3 +379,98 @@ describe("GET /api/versions/:promptId/history — no private content", () => {
     expect(JSON.stringify(res.body)).not.toContain("SECRET");
   });
 });
+
+describe("creator-session expiry", () => {
+  it.each([
+    { action: CREATOR_OWNED_READ, route: "buyer", collection: "owned" },
+    { action: CREATOR_DRAFTS_READ, route: "creator", collection: "drafts" },
+  ] as const)(
+    "rejects $collection reads at expiry before private lookups",
+    async ({ action, route, collection }) => {
+      const creator = Keypair.random();
+      const issued = issueSigned(creator, action, { now: 1_700_000_000_000 });
+      mockUserFindOne.mockResolvedValue({
+        _id: "u1",
+        walletAddress: creator.publicKey().toLowerCase(),
+      });
+      chainFind([{ _id: "p1", content: "PRIVATE CONTENT" }]);
+      const clock = jest.spyOn(Date, "now").mockReturnValue(issued.expiresAt);
+
+      try {
+        const res = await request(buildApp())
+          .get(`/api/prompts/${route}/${creator.publicKey()}/${collection}`)
+          .set("Authorization", `Bearer ${issued.sessionToken}`)
+          .set("X-Wallet-Signature", issued.signature);
+
+        expect(res.status).toBe(401);
+        expect(res.body.code).toBe("expired_token");
+        expect(mockUserFindOne).not.toHaveBeenCalled();
+        expect(mockPromptFind).not.toHaveBeenCalled();
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("rejects version writes at expiry before lookup or publication", async () => {
+    const creator = Keypair.random();
+    const issued = issueSigned(creator, CREATOR_VERSION_WRITE, {
+      promptId: PROMPT_ID,
+      content: CONTENT,
+      now: 1_700_000_000_000,
+    });
+    mockUserFindOne.mockResolvedValue({
+      _id: "u1",
+      walletAddress: creator.publicKey().toLowerCase(),
+    });
+    mockPromptFindOne.mockResolvedValue({ _id: PROMPT_ID });
+    const clock = jest.spyOn(Date, "now").mockReturnValue(issued.expiresAt);
+
+    try {
+      const res = await request(buildApp())
+        .post("/api/versions/update")
+        .send({
+          promptId: PROMPT_ID,
+          content: CONTENT,
+          sessionToken: issued.sessionToken,
+          signature: issued.signature,
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("expired_token");
+      expect(mockUserFindOne).not.toHaveBeenCalled();
+      expect(mockPromptFindOne).not.toHaveBeenCalled();
+      expect(mockPublish).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("returns the private owned projection one millisecond before expiry", async () => {
+    const creator = Keypair.random();
+    const issued = issueSigned(creator, CREATOR_OWNED_READ, {
+      now: 1_700_000_000_000,
+    });
+    mockUserFindOne.mockResolvedValue({
+      _id: "u1",
+      walletAddress: creator.publicKey().toLowerCase(),
+    });
+    chainFind([{ _id: "p1", content: "PRIVATE CONTENT" }]);
+    const clock = jest.spyOn(Date, "now").mockReturnValue(issued.expiresAt - 1);
+
+    try {
+      const res = await request(buildApp())
+        .get(`/api/prompts/buyer/${creator.publicKey()}/owned`)
+        .set("Authorization", `Bearer ${issued.sessionToken}`)
+        .set("X-Wallet-Signature", issued.signature);
+
+      expect(res.status).toBe(200);
+      expect(res.body[0].content).toBe("PRIVATE CONTENT");
+      expect(mockUserFindOne).toHaveBeenCalledWith({
+        walletAddress: creator.publicKey().toLowerCase(),
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});

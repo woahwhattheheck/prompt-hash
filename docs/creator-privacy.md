@@ -38,6 +38,13 @@ Version-write sessions bind `SHA-256(content)`. Mutating the body content after
 the session is issued yields `403 digest_mismatch`. This binds creator, prompt,
 and request digest together.
 
+### Expiry
+
+A session is valid only while `now < expiresAt`. At or after that timestamp,
+private reads and version writes return `401 expired_token` before looking up
+private prompt data or publishing a version. Expiry rejection does not consume
+the session nonce.
+
 ### Replay
 
 Each session `nonce` may be consumed once (in-process ledger). Replaying a
