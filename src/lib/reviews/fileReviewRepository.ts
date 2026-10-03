@@ -46,7 +46,10 @@ async function readSnapshot(filePath: string): Promise<FileSnapshot> {
   }
 }
 
-async function writeSnapshot(filePath: string, snapshot: FileSnapshot): Promise<void> {
+async function writeSnapshot(
+  filePath: string,
+  snapshot: FileSnapshot,
+): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`;
   const payload = JSON.stringify(snapshot, null, 2);
@@ -61,7 +64,9 @@ function newReviewId(): string {
 export function createFileReviewRepository(filePath: string): ReviewRepository {
   const absPath = path.resolve(filePath);
 
-  async function mutate<T>(fn: (snap: FileSnapshot) => T | Promise<T>): Promise<T> {
+  async function mutate<T>(
+    fn: (snap: FileSnapshot) => T | Promise<T>,
+  ): Promise<T> {
     return withPathLock(absPath, async () => {
       const snap = await readSnapshot(absPath);
       const result = await fn(snap);
@@ -82,13 +87,19 @@ export function createFileReviewRepository(filePath: string): ReviewRepository {
     async hasUserReviewed(promptId, userAddress) {
       const snap = await withPathLock(absPath, () => readSnapshot(absPath));
       const key = uniqueReviewKey(promptId, userAddress);
-      return snap.reviews.some((r) => uniqueReviewKey(r.promptId, r.userAddress) === key);
+      return snap.reviews.some(
+        (r) => uniqueReviewKey(r.promptId, r.userAddress) === key,
+      );
     },
 
     async addReview(promptId, userAddress, rating, text) {
       return mutate((snap) => {
         const key = uniqueReviewKey(promptId, userAddress);
-        if (snap.reviews.some((r) => uniqueReviewKey(r.promptId, r.userAddress) === key)) {
+        if (
+          snap.reviews.some(
+            (r) => uniqueReviewKey(r.promptId, r.userAddress) === key,
+          )
+        ) {
           throw new DuplicateReviewError();
         }
         const now = Date.now();
@@ -118,7 +129,11 @@ export function createFileReviewRepository(filePath: string): ReviewRepository {
         if (!review) throw new ReviewNotFoundError();
 
         const reporter = normalizeWallet(reporterAddress);
-        if (review.reports.some((rep) => normalizeWallet(rep.reporterAddress) === reporter)) {
+        if (
+          review.reports.some(
+            (rep) => normalizeWallet(rep.reporterAddress) === reporter,
+          )
+        ) {
           throw new DuplicateReportError();
         }
 
@@ -165,7 +180,9 @@ export function createFileReviewRepository(filePath: string): ReviewRepository {
     async getById(reviewId, promptId) {
       const snap = await withPathLock(absPath, () => readSnapshot(absPath));
       const review = snap.reviews.find(
-        (r) => r.id === reviewId && (promptId === undefined || r.promptId === String(promptId)),
+        (r) =>
+          r.id === reviewId &&
+          (promptId === undefined || r.promptId === String(promptId)),
       );
       return review
         ? { ...review, reports: review.reports.map((x) => ({ ...x })) }

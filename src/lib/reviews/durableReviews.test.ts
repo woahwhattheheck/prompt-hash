@@ -47,11 +47,16 @@ function mongoCastingRepository(
       };
     },
     async findOneAndUpdate(filter, update, options) {
-      filters.push(Review.findOneAndUpdate(filter, update, options).cast(Review));
+      filters.push(
+        Review.findOneAndUpdate(filter, update, options).cast(Review),
+      );
       return row;
     },
   };
-  return { repo: createMongoReviewRepository(model as MongoReviewModel), filters };
+  return {
+    repo: createMongoReviewRepository(model as MongoReviewModel),
+    filters,
+  };
 }
 
 describe("Mongo review identifier casting", () => {
@@ -64,11 +69,23 @@ describe("Mongo review identifier casting", () => {
     }).toObject();
     const { repo, filters } = mongoCastingRepository(review);
 
-    expect((await repo.getById(review.reviewId, "42"))?.id).toBe(review.reviewId);
+    expect((await repo.getById(review.reviewId, "42"))?.id).toBe(
+      review.reviewId,
+    );
     expect((await repo.getById(review.reviewId))?.id).toBe(review.reviewId);
-    expect((await repo.reportReview(review.reviewId, "42", "GREPORTER", "Spam links")).id)
-      .toBe(review.reviewId);
-    expect((await repo.moderateReview(review.reviewId, "42", "hide")).id).toBe(review.reviewId);
+    expect(
+      (
+        await repo.reportReview(
+          review.reviewId,
+          "42",
+          "GREPORTER",
+          "Spam links",
+        )
+      ).id,
+    ).toBe(review.reviewId);
+    expect((await repo.moderateReview(review.reviewId, "42", "hide")).id).toBe(
+      review.reviewId,
+    );
 
     expect(filters).toEqual([
       { reviewId: review.reviewId, promptId: "42" },
@@ -83,15 +100,27 @@ describe("Mongo review identifier casting", () => {
   });
 
   it("retains legacy ObjectId lookup and prompt scope for reads and mutations", async () => {
-    const review = new Review({ promptId: "42", userAddress: "gbuyer", rating: 4 }).toObject();
+    const review = new Review({
+      promptId: "42",
+      userAddress: "gbuyer",
+      rating: 4,
+    }).toObject();
     const reviewId = review._id.toString();
     const { repo, filters } = mongoCastingRepository(review);
 
     expect((await repo.getById(reviewId))?.id).toBe(reviewId);
-    expect((await repo.reportReview(reviewId, "42", "GREPORTER", "Spam links")).id).toBe(reviewId);
-    expect((await repo.moderateReview(reviewId, "42", "hide")).id).toBe(reviewId);
+    expect(
+      (await repo.reportReview(reviewId, "42", "GREPORTER", "Spam links")).id,
+    ).toBe(reviewId);
+    expect((await repo.moderateReview(reviewId, "42", "hide")).id).toBe(
+      reviewId,
+    );
 
-    expect(filters.map((filter) => filter.promptId)).toEqual([undefined, "42", "42"]);
+    expect(filters.map((filter) => filter.promptId)).toEqual([
+      undefined,
+      "42",
+      "42",
+    ]);
     for (const filter of filters) {
       expect(filter.$or).toEqual([{ reviewId }, { _id: review._id }]);
     }
@@ -103,10 +132,12 @@ describe("Mongo review identifier casting", () => {
       const { repo, filters } = mongoCastingRepository(null);
 
       expect(await repo.getById(reviewId, "42")).toBeNull();
-      await expect(repo.reportReview(reviewId, "42", "GREPORTER", "Spam links"))
-        .rejects.toBeInstanceOf(ReviewNotFoundError);
-      await expect(repo.moderateReview(reviewId, "42", "hide"))
-        .rejects.toBeInstanceOf(ReviewNotFoundError);
+      await expect(
+        repo.reportReview(reviewId, "42", "GREPORTER", "Spam links"),
+      ).rejects.toBeInstanceOf(ReviewNotFoundError);
+      await expect(
+        repo.moderateReview(reviewId, "42", "hide"),
+      ).rejects.toBeInstanceOf(ReviewNotFoundError);
       expect(filters.every((filter) => filter.promptId === "42")).toBe(true);
     },
   );
@@ -155,36 +186,57 @@ describe("file-backed durable reviews", () => {
   });
 
   it.each([
-    ["unsupported version", (reviews: StoredReview[]) => ({ version: 2, reviews })],
+    [
+      "unsupported version",
+      (reviews: StoredReview[]) => ({ version: 2, reviews }),
+    ],
     ["missing version", (reviews: StoredReview[]) => ({ reviews })],
-    ["non-array reviews", (reviews: StoredReview[]) => ({ version: 1, reviews: { saved: reviews } })],
+    [
+      "non-array reviews",
+      (reviews: StoredReview[]) => ({
+        version: 1,
+        reviews: { saved: reviews },
+      }),
+    ],
     ["top-level array", (reviews: StoredReview[]) => reviews],
     ["null", () => null],
-  ] as const)("preserves an incompatible snapshot: %s", async (_label, incompatibleSnapshot) => {
-    const created = await repo.addReview(
-      "42",
-      "GSAVEDREVIEW",
-      5,
-      "This persisted review must survive a rejected snapshot.",
-    );
-    const valid = await fs.readFile(storePath, "utf8");
-    const raw = JSON.stringify(incompatibleSnapshot([created]));
-    await fs.writeFile(storePath, raw, "utf8");
+  ] as const)(
+    "preserves an incompatible snapshot: %s",
+    async (_label, incompatibleSnapshot) => {
+      const created = await repo.addReview(
+        "42",
+        "GSAVEDREVIEW",
+        5,
+        "This persisted review must survive a rejected snapshot.",
+      );
+      const valid = await fs.readFile(storePath, "utf8");
+      const raw = JSON.stringify(incompatibleSnapshot([created]));
+      await fs.writeFile(storePath, raw, "utf8");
 
-    await expect(repo.listByPrompt("42")).rejects.toThrow("Invalid review store snapshot");
-    expect(await fs.readFile(storePath, "utf8")).toBe(raw);
-    await expect(
-      repo.addReview("42", "GNEWREVIEW", 4, "A new review must not overwrite stored data."),
-    ).rejects.toThrow("Invalid review store snapshot");
-    expect(await fs.readFile(storePath, "utf8")).toBe(raw);
-    await expect(repo.removeSeedRecords()).rejects.toThrow("Invalid review store snapshot");
-    expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+      await expect(repo.listByPrompt("42")).rejects.toThrow(
+        "Invalid review store snapshot",
+      );
+      expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+      await expect(
+        repo.addReview(
+          "42",
+          "GNEWREVIEW",
+          4,
+          "A new review must not overwrite stored data.",
+        ),
+      ).rejects.toThrow("Invalid review store snapshot");
+      expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+      await expect(repo.removeSeedRecords()).rejects.toThrow(
+        "Invalid review store snapshot",
+      );
+      expect(await fs.readFile(storePath, "utf8")).toBe(raw);
 
-    // A rejected snapshot releases the path lock, so restoring valid data recovers.
-    await fs.writeFile(storePath, valid, "utf8");
-    expect(await repo.getById(created.id, "42")).toEqual(created);
-    expect(await fs.readFile(storePath, "utf8")).toBe(valid);
-  });
+      // A rejected snapshot releases the path lock, so restoring valid data recovers.
+      await fs.writeFile(storePath, valid, "utf8");
+      expect(await repo.getById(created.id, "42")).toEqual(created);
+      expect(await fs.readFile(storePath, "utf8")).toBe(valid);
+    },
+  );
 
   it("keeps two repository instances consistent on one durable path", async () => {
     const a = createFileReviewRepository(storePath);
@@ -216,7 +268,9 @@ describe("file-backed durable reviews", () => {
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(11);
     for (const r of rejected) {
-      expect((r as PromiseRejectedResult).reason).toBeInstanceOf(DuplicateReviewError);
+      expect((r as PromiseRejectedResult).reason).toBeInstanceOf(
+        DuplicateReviewError,
+      );
     }
 
     const listed = await repo.listByPrompt(promptId);
@@ -226,14 +280,19 @@ describe("file-backed durable reviews", () => {
 
   it("rejects sequential duplicates with DuplicateReviewError", async () => {
     await addReview("1", "GSEQ", 5, "First durable review submission ok.");
-    await expect(addReview("1", "GSEQ", 4, "Second attempt should fail uniquely.")).rejects.toBeInstanceOf(
-      DuplicateReviewError,
-    );
+    await expect(
+      addReview("1", "GSEQ", 4, "Second attempt should fail uniquely."),
+    ).rejects.toBeInstanceOf(DuplicateReviewError);
     expect(await repo.countAll()).toBe(1);
   });
 
   it("reports and moderates atomically", async () => {
-    const review = await addReview("5", "GREVIEWER", 5, "Solid prompt worth reviewing carefully.");
+    const review = await addReview(
+      "5",
+      "GREVIEWER",
+      5,
+      "Solid prompt worth reviewing carefully.",
+    );
     const flagged = await reportReview(
       review.id,
       "5",
@@ -244,7 +303,12 @@ describe("file-backed durable reviews", () => {
     expect(flagged.reportCount).toBe(1);
 
     await expect(
-      reportReview(review.id, "5", "GREPORTER1", "Trying to report again same wallet."),
+      reportReview(
+        review.id,
+        "5",
+        "GREPORTER1",
+        "Trying to report again same wallet.",
+      ),
     ).rejects.toBeInstanceOf(DuplicateReportError);
 
     const hidden = await moderateReview(review.id, "5", "hide");
@@ -268,7 +332,8 @@ describe("file-backed durable reviews", () => {
       {
         id: LEGACY_SEED_REVIEW_IDS[0],
         promptId: "1",
-        userAddress: "GABC123XYZ456DEF789GHI012JKL345MNO678PQR901STU234VWX567YZ",
+        userAddress:
+          "GABC123XYZ456DEF789GHI012JKL345MNO678PQR901STU234VWX567YZ",
         rating: 5,
         text: "Excellent prompt! Helped me generate high-quality technical documentation in minutes.",
         createdAt: Date.now() - 1000,

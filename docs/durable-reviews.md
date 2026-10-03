@@ -4,10 +4,10 @@ Review submission, reports, and moderation no longer use a process-local seeded 
 
 ## Backends
 
-| Backend | When | Notes |
-|---------|------|--------|
-| Mongo (`Review` model) | `MONGODB_URI` set | Unique index on `(promptId, userAddress)`; atomic report/moderate updates |
-| File store | otherwise / tests | JSON file at `REVIEW_STORE_PATH` (default: OS temp `prompt-hash-reviews/reviews.json`); path lock + atomic rename |
+| Backend                | When              | Notes                                                                                                             |
+| ---------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Mongo (`Review` model) | `MONGODB_URI` set | Unique index on `(promptId, userAddress)`; atomic report/moderate updates                                         |
+| File store             | otherwise / tests | JSON file at `REVIEW_STORE_PATH` (default: OS temp `prompt-hash-reviews/reviews.json`); path lock + atomic rename |
 
 ## Guarantees
 
@@ -30,9 +30,9 @@ test/reset operation still replaces the snapshot intentionally.
 
 ## Env
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `MONGODB_URI` | unset | Prefer Mongo repository when set |
+| Variable            | Default  | Meaning                             |
+| ------------------- | -------- | ----------------------------------- |
+| `MONGODB_URI`       | unset    | Prefer Mongo repository when set    |
 | `REVIEW_STORE_PATH` | temp dir | File-store path when Mongo is unset |
 
 ## Migration
