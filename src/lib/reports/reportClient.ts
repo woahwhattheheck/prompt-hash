@@ -77,6 +77,17 @@ function adminAuthHeaders(): HeadersInit {
   };
 }
 
+class ReportAuthorizationError extends Error {
+  constructor(status: 401 | 403) {
+    super(
+      status === 401
+        ? "Report review credentials are missing, invalid, or expired."
+        : "You do not have permission to review reports.",
+    );
+    this.name = "ReportAuthorizationError";
+  }
+}
+
 export class ReportClient {
   /**
    * Submit a report for a prompt, optionally with privacy-safe evidence refs.
@@ -120,7 +131,7 @@ export class ReportClient {
   }
 
   /**
-   * Get reports for a specific prompt (admin only).
+   * Get reports for a specific prompt (signed admin or report reviewer).
    */
   static async getPromptReports(
     promptId?: string,
@@ -138,12 +149,18 @@ export class ReportClient {
         },
       );
 
+      if (response.status === 401 || response.status === 403) {
+        throw new ReportAuthorizationError(response.status);
+      }
       if (!response.ok) {
         throw new Error("Failed to fetch reports");
       }
 
       return await response.json();
     } catch (error) {
+      // Let the queue's error state distinguish rejected credentials from
+      // a successful read that happens to contain no reports.
+      if (error instanceof ReportAuthorizationError) throw error;
       console.error("Fetch reports error:", error);
       return [];
     }

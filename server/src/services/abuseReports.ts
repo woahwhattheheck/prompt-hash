@@ -121,8 +121,9 @@ export function buildStatusTransition(input: {
   at?: Date | string;
 }): StatusTransition {
   assertTransition(input.from, input.to);
-  const actor = String(input.actor || "").trim();
-  if (!actor) {
+  // Actor is an opaque verified subject; validate without changing its identity.
+  const actor = String(input.actor || "");
+  if (!actor.trim()) {
     throw new StatusTransitionError("actor is required for status transitions");
   }
   const at =
@@ -132,7 +133,7 @@ export function buildStatusTransition(input: {
   return {
     from: input.from,
     to: input.to,
-    actor: actor.toLowerCase(),
+    actor,
     notes: input.notes?.slice(0, 500) || undefined,
     at,
   };

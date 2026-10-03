@@ -194,10 +194,28 @@ describe("moderation status machine", () => {
       actor: "GABCADMIN",
       notes: "looking into plagiarism claim",
     });
-    expect(t.actor).toBe("gabcadmin");
+    expect(t.actor).toBe("GABCADMIN");
     expect(t.from).toBe("pending");
     expect(t.to).toBe("investigating");
     expect(t.at).toMatch(/T/);
+  });
+
+  it.each(["Ops-A", "ops-a", " Ops-A "])(
+    "preserves the exact moderator subject %j in status transitions",
+    (actor) => {
+      const transition = buildStatusTransition({
+        from: "pending",
+        to: "investigating",
+        actor,
+      });
+      expect(transition.actor).toBe(actor);
+    },
+  );
+
+  it.each(["", " \t "])("rejects an empty moderator subject %j", (actor) => {
+    expect(() =>
+      buildStatusTransition({ from: "pending", to: "investigating", actor }),
+    ).toThrow(StatusTransitionError);
   });
 });
 

@@ -42,7 +42,6 @@ const statusHistorySchema = new mongoose.Schema(
     actor: {
       type: String,
       required: true,
-      lowercase: true,
     },
     notes: {
       type: String,
@@ -122,7 +121,6 @@ const reportSchema = new mongoose.Schema(
     moderatedBy: {
       type: String,
       default: null,
-      lowercase: true,
     },
   },
   {

@@ -1,10 +1,12 @@
 import {
   normalizeEvidence,
   EvidenceValidationError,
+  StatusTransitionError,
   canTransition,
   buildStatusTransition,
   duplicateReportKey,
 } from "./abuseReports";
+import Report from "../models/Report";
 
 describe("abuseReports service", () => {
   it("rejects unsafe evidence and accepts valid refs", () => {
@@ -99,6 +101,57 @@ describe("abuseReports service", () => {
     });
     expect(t.to).toBe("dismissed");
   });
+
+  it.each(["Ops-A", "ops-a", " Ops-A "])(
+    "preserves the exact moderator subject %j in status transitions",
+    (actor) => {
+      const transition = buildStatusTransition({
+        from: "pending",
+        to: "investigating",
+        actor,
+      });
+      expect(transition.actor).toBe(actor);
+    },
+  );
+
+  it.each(["", " \t "])("rejects an empty moderator subject %j", (actor) => {
+    expect(() =>
+      buildStatusTransition({ from: "pending", to: "investigating", actor }),
+    ).toThrow(StatusTransitionError);
+  });
+
+  it.each(["Ops-A", "ops-a", " Ops-A "])(
+    "preserves the exact moderator subject %j during Mongoose casting",
+    (actor) => {
+      const report = new Report({
+        promptId: "p1",
+        reporterAddress: "GREPORTER",
+        reason: "other",
+        statusHistory: [
+          { from: "pending", to: "investigating", actor, at: new Date() },
+        ],
+        moderatedBy: actor,
+      });
+
+      expect(report.validateSync()).toBeUndefined();
+      expect(report.reporterAddress).toBe("greporter");
+      expect(report.statusHistory[0].actor).toBe(actor);
+      expect(report.moderatedBy).toBe(actor);
+
+      const nextActor = `${actor}:Next`;
+      report.statusHistory.push({
+        from: "investigating",
+        to: "resolved",
+        actor: nextActor,
+        at: new Date(),
+      });
+      report.moderatedBy = nextActor;
+
+      const stored = report.toObject();
+      expect(stored.statusHistory[1].actor).toBe(nextActor);
+      expect(stored.moderatedBy).toBe(nextActor);
+    },
+  );
 
   it("builds duplicate keys consistently", () => {
     expect(duplicateReportKey("1", "GABC", "other")).toBe(

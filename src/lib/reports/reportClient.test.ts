@@ -9,7 +9,9 @@ describe("ReportClient", () => {
 
   describe("REPORT_REASONS", () => {
     it("should have all valid report reasons", () => {
-      expect(REPORT_REASONS["quality-issue"]).toBe("Low quality or poor result");
+      expect(REPORT_REASONS["quality-issue"]).toBe(
+        "Low quality or poor result",
+      );
       expect(REPORT_REASONS["misleading-content"]).toBe(
         "Content doesn't match description",
       );
@@ -35,9 +37,7 @@ describe("ReportClient", () => {
         }),
       });
 
-      const evidence = [
-        { kind: "content_hash" as const, ref: "a".repeat(64) },
-      ];
+      const evidence = [{ kind: "content_hash" as const, ref: "a".repeat(64) }];
 
       const result = await ReportClient.submitReport(
         "prompt-1",
@@ -119,6 +119,33 @@ describe("ReportClient", () => {
       const result = await ReportClient.getPromptReports("prompt-1");
 
       expect(result).toEqual(mockReports);
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/prompts/reports?promptId=prompt-1",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer mock-token",
+          }),
+        }),
+      );
+    });
+
+    it.each([401, 403])(
+      "surfaces HTTP %i authorization failures instead of an empty queue",
+      async (status) => {
+        global.fetch = vi.fn().mockResolvedValue({ ok: false, status });
+
+        await expect(ReportClient.getPromptReports()).rejects.toThrow(
+          status === 401
+            ? "Report review credentials are missing, invalid, or expired."
+            : "You do not have permission to review reports.",
+        );
+      },
+    );
+
+    it("keeps the existing empty-array response for non-auth API failures", async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+
+      await expect(ReportClient.getPromptReports()).resolves.toEqual([]);
     });
 
     it("should return empty array on error", async () => {
@@ -147,7 +174,7 @@ describe("ReportClient", () => {
         }),
       });
 
-      localStorage.setItem("adminToken", "admin-secret-key");
+      localStorage.setItem("adminToken", "signed-review-token");
       const result = await ReportClient.updateReportStatus(
         "r1",
         "investigating",

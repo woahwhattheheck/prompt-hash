@@ -7,6 +7,14 @@ import { stellarConfig } from "../config/stellar";
 import User from "../models/User";
 import Prompt from "../models/Prompt";
 import Report from "../models/Report";
+import { authorizeAdminPrincipal } from "../auth/adminPrincipal";
+import {
+  ADMIN_ROLE,
+  AdminAuthError,
+  REPORT_REVIEW_AUDIENCE,
+  authorizeReportReview,
+  httpStatusForAuthError,
+} from "../auth/reportReviewAuth";
 import {
   normalizeEvidence,
   EvidenceValidationError,
@@ -440,38 +448,12 @@ const VALID_REPORT_REASONS = [
   "other",
 ] as const;
 
-function isAuthorizedReportModerator(
-  req: Request,
-  adminAddress?: string,
-  adminSecretKey?: string,
-): boolean {
-  const adminApiKey = process.env.ADMIN_API_KEY ?? "admin-secret-key";
-  const configuredAdmin =
-    process.env.ADMIN_WALLET_ADDRESS ??
-    process.env.PUBLIC_STELLAR_SIMULATION_ACCOUNT ??
-    "";
-  const authHeader = req.headers?.authorization;
-
-  if (adminSecretKey && adminSecretKey === adminApiKey) {
-    return true;
-  }
-  if (authHeader && authHeader === `Bearer ${adminApiKey}`) {
-    return true;
-  }
-  const token = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice("Bearer ".length)
-    : undefined;
-  if (token && token === adminApiKey) {
-    return true;
-  }
-  if (
-    configuredAdmin &&
-    adminAddress &&
-    adminAddress.toLowerCase() === configuredAdmin.toLowerCase()
-  ) {
-    return true;
-  }
-  return false;
+function reportAuthFailure(res: Response, err: AdminAuthError): Response<any> {
+  const status = httpStatusForAuthError(err);
+  return res.status(status).json({
+    error: status === 403 ? "Forbidden" : "Unauthorized",
+    code: err.code,
+  });
 }
 
 function serializeReportForAdmin(report: any) {
@@ -610,22 +592,8 @@ export const GetPromptReports = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
+    authorizeReportReview(req.headers?.authorization);
     await connectDb();
-
-    const adminAddress =
-      typeof req.query.adminAddress === "string"
-        ? req.query.adminAddress
-        : undefined;
-    const adminSecretKey =
-      typeof (req.body as any)?.adminSecretKey === "string"
-        ? (req.body as any).adminSecretKey
-        : undefined;
-
-    if (!isAuthorizedReportModerator(req, adminAddress, adminSecretKey)) {
-      return res.status(401).json({
-        error: "Unauthorized: Admin token required",
-      });
-    }
 
     let promptId: string | null = null;
     let status: string | null = null;
@@ -654,6 +622,7 @@ export const GetPromptReports = async (
 
     return res.json(reports.map(serializeReportForAdmin));
   } catch (err) {
+    if (err instanceof AdminAuthError) return reportAuthFailure(res, err);
     console.error("Get reports error:", err);
     return res.status(500).json({
       error: (err as Error).message || "Failed to fetch reports",
@@ -666,32 +635,27 @@ export const UpdatePromptReportStatus = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
-    await connectDb();
+    const principal = authorizeAdminPrincipal(req.headers?.authorization, {
+      expectedAud: REPORT_REVIEW_AUDIENCE,
+      requiredRoles: [ADMIN_ROLE],
+    });
 
-    const reportId = String(req.params.id || req.body?.reportId || "");
+    const reportId = String(req.params?.id || req.body?.reportId || "");
     const {
       status,
       adminNotes,
-      actor,
-      adminAddress,
-      adminSecretKey,
       notes,
     } = req.body ?? {};
 
-    const moderator = String(actor || adminAddress || "").trim();
+    const moderator = principal.sub;
 
-    if (!reportId || !status || !moderator) {
+    if (!reportId || !status) {
       return res.status(400).json({
-        error: "reportId (or :id), status, and actor/adminAddress are required",
+        error: "reportId (or :id) and status are required",
       });
     }
 
-    if (!isAuthorizedReportModerator(req, moderator, adminSecretKey)) {
-      return res.status(403).json({
-        error: "Unauthorized: Maintainer/Admin permissions required to update report status",
-      });
-    }
-
+    await connectDb();
     const report = await Report.findById(reportId);
     if (!report) {
       return res.status(404).json({ error: "Report not found" });
@@ -747,6 +711,7 @@ export const UpdatePromptReportStatus = async (
       report: serializeReportForAdmin(report),
     });
   } catch (err) {
+    if (err instanceof AdminAuthError) return reportAuthFailure(res, err);
     console.error("Update report status error:", err);
     return res.status(500).json({
       error: (err as Error).message || "Failed to update report status",
