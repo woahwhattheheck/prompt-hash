@@ -31,7 +31,11 @@ export async function resolveListingQuote(
 
   await connectDb();
 
-  const prompt = await Prompt.findById(promptId).lean();
+  // Unlock uses numeric on-chain IDs; the indexer stores them in onChainId.
+  // Retain document-ID lookup for existing nondecimal metadata callers.
+  const prompt = /^\d+$/.test(promptId)
+    ? await Prompt.findOne({ onChainId: BigInt(promptId).toString() }).lean()
+    : await Prompt.findById(promptId).lean();
   if (!prompt) {
     throw new Error("Prompt listing not found.");
   }
