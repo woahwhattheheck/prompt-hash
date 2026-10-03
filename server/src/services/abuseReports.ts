@@ -264,7 +264,15 @@ export function normalizeEvidence(
       }
     }
 
-    const dedupeKey = `${kind}:${ref.toLowerCase()}`;
+    const dedupeRef =
+      kind === "content_hash" ||
+      kind === "screenshot_hash" ||
+      kind === "tx_hash"
+        ? ref.toLowerCase()
+        : kind === "url_ref"
+          ? new URL(ref).href
+          : ref;
+    const dedupeKey = `${kind}:${dedupeRef}`;
     if (seen.has(dedupeKey)) {
       continue;
     }

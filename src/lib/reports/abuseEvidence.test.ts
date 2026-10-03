@@ -130,6 +130,40 @@ describe("normalizeEvidence", () => {
     ]);
     expect(result).toHaveLength(1);
   });
+
+  it.each([
+    {
+      name: "URL paths",
+      kind: "url_ref",
+      refs: ["https://example.com/Evidence", "https://example.com/evidence"],
+    },
+    {
+      name: "URL query values",
+      kind: "url_ref",
+      refs: ["https://example.com/proof?id=AbC", "https://example.com/proof?id=abc"],
+    },
+    {
+      name: "CIDv0 references",
+      kind: "ipfs_cid",
+      refs: [
+        "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
+        "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdg",
+      ],
+    },
+  ])("preserves case-sensitive $name while removing exact duplicates", ({ kind, refs }) => {
+    const entries = refs.map((ref) => ({ kind, ref }));
+    expect(normalizeEvidence([...entries, entries[0]])).toEqual(entries);
+  });
+
+  it("still dedupes hex case and URL host case without changing retained refs", () => {
+    const entries = [
+      { kind: "content_hash", ref: "c".repeat(64) },
+      { kind: "content_hash", ref: "C".repeat(64) },
+      { kind: "url_ref", ref: "https://EXAMPLE.com/Proof" },
+      { kind: "url_ref", ref: "https://example.com/Proof" },
+    ];
+    expect(normalizeEvidence(entries)).toEqual([entries[0], entries[2]]);
+  });
 });
 
 describe("moderation status machine", () => {
