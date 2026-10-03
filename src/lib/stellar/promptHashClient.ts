@@ -6,7 +6,6 @@
  */
 import { Server } from "@stellar/stellar-sdk/rpc";
 import { isDemoMarketplaceEnabled } from "@/lib/marketplace/demoMode";
-import { demoTxHashFor } from "@/lib/marketplace/demo/demoMarketplaceAdapter";
 
 let hasWarnedMock = false;
 const warnMockUse = () => {
@@ -114,6 +113,11 @@ export class PromptHashClient {
         "[release-safety] Mock purchase requires opt-in demo marketplace mode (?demo=1, ?e2e=1, or VITE_ENABLE_DEMO_MARKETPLACE=1). Stochastic / synthetic hashes are disabled (#154).",
       );
     }
+
+    // This import is unreachable in production and can be removed by Vite.
+    const { demoTxHashFor } = await import(
+      "@/lib/marketplace/demo/demoMarketplaceAdapter"
+    );
 
     return new Promise((resolve, reject) => {
       const delay = options?.delay ?? 2000;

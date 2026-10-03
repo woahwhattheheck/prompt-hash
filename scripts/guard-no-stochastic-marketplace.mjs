@@ -105,6 +105,10 @@ if (bundleDir) {
       console.log(`  ✖ bundle ${relative(root, file)}: stochastic marketplace pattern`);
       bundleHits++;
     }
+    if (text.includes("tx_demo_")) {
+      console.log(`  ✖ bundle ${relative(root, file)}: deterministic demo marketplace fixture`);
+      bundleHits++;
+    }
     if (demoFlag.test(text)) {
       console.log(`  ✖ bundle ${relative(root, file)}: demo marketplace flag baked as enabled`);
       bundleHits++;

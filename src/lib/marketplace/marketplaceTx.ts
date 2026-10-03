@@ -45,6 +45,12 @@ export {
 };
 
 async function loadDemo() {
+  // Keep the import behind a compile-time branch so production bundles omit it.
+  if (import.meta.env.PROD) {
+    throw new Error(
+      "[release-safety] Demo marketplace adapters are excluded from production builds (#154).",
+    );
+  }
   return import("./demo/demoMarketplaceAdapter");
 }
 

@@ -39,3 +39,12 @@ npm run test:marketplace-release-safety
 
 The guard fails if cited production sources regain `Math.random()` in
 executable code (comments mentioning the ban are ignored).
+
+Demo imports in the facade and `PromptHashClient` are behind compile-time
+`import.meta.env.PROD` branches, so the production marketplace bundle omits
+the demo adapter and its deterministic transaction hashes entirely. The release
+safety suite checks the actual minified marketplace entry (with the Stellar SDK
+external) and preserves the existing deterministic demo/UI cases.
+
+After building, `node scripts/guard-no-stochastic-marketplace.mjs --bundle dist`
+also rejects emitted JavaScript containing reserved `tx_demo_` fixtures.
