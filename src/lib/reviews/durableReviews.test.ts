@@ -4,7 +4,19 @@
  * Covers: restart, multi-instance concurrency, duplicate review,
  * reporting, moderation, and migration/removal of seed records.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
+import { spawn } from "child_process";
+import { transpileModule, ModuleKind, ScriptTarget } from "typescript";
+import { withPathLock } from "./pathLock";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -382,5 +394,361 @@ describe("file-backed durable reviews", () => {
     expect(await repo.countAll()).toBe(0);
     expect(await getPublicReviews("1")).toHaveLength(0);
     expect(await getPublicReviews("3")).toHaveLength(0);
+  });
+});
+
+describe("file-store coordination across local processes", () => {
+  let workerDir: string;
+  let storePath: string;
+  let repo: ReviewRepository;
+
+  type Operation = {
+    method: "addReview" | "reportReview";
+    args: Array<string | number>;
+  };
+  type Outcome = {
+    status: "fulfilled" | "rejected";
+    id?: string;
+    name?: string;
+    message?: string;
+  };
+
+  beforeAll(async () => {
+    workerDir = await fs.mkdtemp(path.join(os.tmpdir(), "ph-review-workers-"));
+    await fs.writeFile(
+      path.join(workerDir, "package.json"),
+      JSON.stringify({ type: "commonjs" }),
+    );
+    // Compile the actual repository modules for ordinary Node child processes.
+    // This uses the declared TypeScript dev dependency, without a database.
+    for (const name of ["pathLock", "reviewTypes", "fileReviewRepository"]) {
+      const source = await fs.readFile(
+        new URL("./" + name + ".ts", import.meta.url),
+        "utf8",
+      );
+      const compiled = transpileModule(source, {
+        compilerOptions: {
+          module: ModuleKind.CommonJS,
+          target: ScriptTarget.ES2022,
+          esModuleInterop: true,
+        },
+      });
+      await fs.writeFile(
+        path.join(workerDir, name + ".js"),
+        compiled.outputText,
+      );
+    }
+  });
+
+  afterAll(async () => {
+    await fs.rm(workerDir, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    storePath = await tempStorePath("process");
+    repo = createFileReviewRepository(storePath);
+    await repo.clear();
+  });
+
+  afterEach(async () => {
+    await fs.rm(path.dirname(storePath), { recursive: true, force: true });
+  });
+
+  async function runProcesses(calls: Operation[][]): Promise<Outcome[][]> {
+    const workerCode = `
+      const { createFileReviewRepository } = require(process.argv[1]);
+      const repo = createFileReviewRepository(process.argv[2]);
+      process.once("message", async ({ calls }) => {
+        const outcomes = [];
+        for (const call of calls) {
+          try {
+            const row = await repo[call.method](...call.args);
+            outcomes.push({ status: "fulfilled", id: row.id });
+          } catch (error) {
+            outcomes.push({ status: "rejected", name: error.name, message: error.message });
+          }
+        }
+        process.send({ kind: "result", outcomes });
+        process.disconnect();
+      });
+      process.send({ kind: "ready" });
+    `;
+    const children: ReturnType<typeof spawn>[] = [];
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const workers = calls.map((operations) => {
+        const child = spawn(
+          process.execPath,
+          [
+            "--max-old-space-size=48",
+            "-e",
+            workerCode,
+            path.join(workerDir, "fileReviewRepository.js"),
+            storePath,
+          ],
+          { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+        );
+        children.push(child);
+        let stderr = "";
+        let result: Outcome[] | undefined;
+        let markReady!: () => void;
+        let finish = (value: Outcome[]) => {
+          result = value;
+        };
+        let fail = (error: Error): void => {
+          throw error;
+        };
+        const ready = new Promise<void>((resolve) => {
+          markReady = resolve;
+        });
+        const done = new Promise<Outcome[]>((resolve, reject) => {
+          finish = resolve;
+          fail = reject;
+        });
+        child.stderr?.on("data", (chunk) => {
+          stderr = (stderr + String(chunk)).slice(-4096);
+        });
+        child.on("message", (message) => {
+          const data = message as { kind: string; outcomes?: Outcome[] };
+          if (data.kind === "ready") markReady();
+          if (data.kind === "result") result = data.outcomes;
+        });
+        child.on("error", (error) => {
+          markReady();
+          fail(error);
+        });
+        child.on("exit", (code, signal) => {
+          markReady();
+          if (code === 0 && result) finish(result);
+          else fail(new Error(JSON.stringify({ code, signal, stderr })));
+        });
+        return { child, operations, ready, done };
+      });
+      const completed = Promise.all(workers.map((worker) => worker.done));
+      const timeout = new Promise<never>((_, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error("Review worker deadline exceeded")),
+          8_000,
+        );
+      });
+      await Promise.race([
+        Promise.all(workers.map((worker) => worker.ready)),
+        completed.then(() => {
+          throw new Error("Review workers ended before starting");
+        }),
+        timeout,
+      ]);
+      for (const worker of workers)
+        worker.child.send({ calls: worker.operations });
+      return await Promise.race([completed, timeout]);
+    } finally {
+      clearTimeout(deadline);
+      await Promise.all(
+        children.map(async (child) => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          await new Promise<void>((resolve) => {
+            child.once("exit", () => resolve());
+            child.kill();
+          });
+        }),
+      );
+    }
+  }
+
+  it("retains every accepted distinct review from two processes", async () => {
+    const results = await runProcesses(
+      [0, 1].map((worker) =>
+        Array.from({ length: 4 }, (_, index) => ({
+          method: "addReview" as const,
+          args: [
+            "42",
+            "GWORKER_" + worker + "_" + index,
+            5,
+            "A durable process review.",
+          ],
+        })),
+      ),
+    );
+    expect(
+      results.flat().every((result) => result.status === "fulfilled"),
+    ).toBe(true);
+    const persisted = await repo.listByPrompt("42");
+    expect(persisted).toHaveLength(8);
+    expect(new Set(persisted.map((review) => review.id))).toEqual(
+      new Set(results.flat().map((result) => result.id)),
+    );
+  }, 15_000);
+
+  it("accepts exactly one concurrent duplicate across processes", async () => {
+    const results = (
+      await runProcesses(
+        [0, 1].map((worker) => [
+          {
+            method: "addReview" as const,
+            args: ["99", "GDUPLICATE", 5, "Review from process " + worker],
+          },
+        ]),
+      )
+    ).flat();
+    const accepted = results.filter((result) => result.status === "fulfilled");
+    expect(accepted).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toEqual([
+      expect.objectContaining({ name: "DuplicateReviewError" }),
+    ]);
+    expect((await repo.listByPrompt("99")).map((review) => review.id)).toEqual(
+      accepted.map((result) => result.id),
+    );
+  }, 15_000);
+
+  it("retains every accepted report from two processes", async () => {
+    const review = await repo.addReview(
+      "5",
+      "GREVIEWER",
+      4,
+      "A review to report.",
+    );
+    const results = await runProcesses(
+      [0, 1].map((worker) =>
+        Array.from({ length: 4 }, (_, index) => ({
+          method: "reportReview" as const,
+          args: [
+            review.id,
+            "5",
+            "GREPORTER_" + worker + "_" + index,
+            "A distinct report reason.",
+          ],
+        })),
+      ),
+    );
+    expect(
+      results.flat().every((result) => result.status === "fulfilled"),
+    ).toBe(true);
+    const persisted = await repo.getById(review.id, "5");
+    expect(persisted?.reports).toHaveLength(8);
+    expect(persisted?.reportCount).toBe(8);
+    expect(
+      new Set(persisted?.reports.map((report) => report.reporterAddress)).size,
+    ).toBe(8);
+  }, 15_000);
+
+  it("releases its sidecar after both successful and failed operations", async () => {
+    const lockPath = storePath + ".lock";
+    await expect(
+      withPathLock(storePath, async () => {
+        expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(
+          expect.objectContaining({ version: 1, pid: process.pid }),
+        );
+        return "saved";
+      }),
+    ).resolves.toBe("saved");
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const failure = new Error("Operation failed before replacing the snapshot");
+    await expect(
+      withPathLock(storePath, async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await repo.countAll()).toBe(0);
+  });
+
+  it("times out without stealing an old lock or invoking the operation", async () => {
+    const lockPath = storePath + ".lock";
+    const owner = JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      createdAt: 0,
+    });
+    const snapshot = await fs.readFile(storePath, "utf8");
+    await fs.writeFile(lockPath, owner);
+    await fs.utimes(lockPath, new Date(0), new Date(0));
+    const operation = vi.fn(async () => "must not run");
+    const started = performance.now();
+
+    await expect(withPathLock(storePath, operation)).rejects.toMatchObject({
+      name: "ReviewStoreLockTimeoutError",
+    });
+    expect(performance.now() - started).toBeGreaterThanOrEqual(4_900);
+    expect(operation).not.toHaveBeenCalled();
+    expect(await fs.readFile(lockPath, "utf8")).toBe(owner);
+    expect((await fs.stat(lockPath)).mtimeMs).toBe(0);
+    expect(await fs.readFile(storePath, "utf8")).toBe(snapshot);
+
+    // Explicit recovery after confirming ownership; the library never steals it.
+    await fs.unlink(lockPath);
+    expect(await repo.countAll()).toBe(0);
+  }, 10_000);
+
+  it("propagates setup failures without invoking the operation", async () => {
+    const parentFile = path.join(path.dirname(storePath), "not-a-directory");
+    await fs.writeFile(parentFile, "existing bytes");
+    const operation = vi.fn(async () => "must not run");
+    await expect(
+      withPathLock(path.join(parentFile, "reviews.json"), operation),
+    ).rejects.toMatchObject({
+      code: expect.stringMatching(/^(EEXIST|ENOTDIR)$/),
+    });
+    expect(operation).not.toHaveBeenCalled();
+    expect(await fs.readFile(parentFile, "utf8")).toBe("existing bytes");
+  });
+
+  it("leaves a replacement owner's lock in place during cleanup", async () => {
+    const lockPath = storePath + ".lock";
+    const replacement = JSON.stringify({ owner: "replacement" });
+    await expect(
+      withPathLock(storePath, async () => {
+        await fs.rename(lockPath, lockPath + ".original");
+        await fs.writeFile(lockPath, replacement);
+      }),
+    ).rejects.toThrow("lock ownership changed");
+    expect(await fs.readFile(lockPath, "utf8")).toBe(replacement);
+  });
+
+  it("retains operation and cleanup failures together", async () => {
+    const lockPath = storePath + ".lock";
+    const failure = new Error("Original operation failure");
+    let rejected: unknown;
+    try {
+      await withPathLock(storePath, async () => {
+        await fs.rename(lockPath, lockPath + ".original");
+        await fs.writeFile(lockPath, "replacement owner");
+        throw failure;
+      });
+    } catch (error) {
+      rejected = error;
+    }
+    expect(rejected).toBeInstanceOf(AggregateError);
+    expect((rejected as AggregateError).errors).toEqual([
+      failure,
+      expect.objectContaining({
+        message: expect.stringContaining("lock ownership changed"),
+      }),
+    ]);
+    expect(await fs.readFile(lockPath, "utf8")).toBe("replacement owner");
+  });
+
+  it("allows operations on different paths to progress independently", async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const held = withPathLock(storePath, async () => {
+      entered();
+      await released;
+    });
+    await ready;
+    try {
+      await expect(
+        withPathLock(storePath + ".other", async () => "independent"),
+      ).resolves.toBe("independent");
+    } finally {
+      release();
+      await held;
+    }
   });
 });
