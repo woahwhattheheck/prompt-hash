@@ -56,6 +56,34 @@ describe("redactEndpointUrl", () => {
     expect(redacted).not.toContain("supersecret");
   });
 
+  it.each([
+    "accessToken",
+    "ACCESSTOKEN",
+    "refreshToken",
+    "clientSecret",
+    "authToken",
+    "auth[token]",
+    "credentials.password",
+    "credentials[accessToken]",
+    "params[jwt]",
+  ])("redacts credential query key %s", (key) => {
+    const secret = "REPRO_ONLY_QUERY_SECRET_9204";
+    const params = new URLSearchParams({ [key]: secret, ref: "campaign" });
+    params.append(key, `${secret}_duplicate`);
+    const redacted = redactEndpointUrl(`https://hooks.example.com/hook?${params}`);
+    const safeParams = new URL(redacted).searchParams;
+
+    expect(safeParams.getAll(key)).toEqual(["[REDACTED]", "[REDACTED]"]);
+    expect(safeParams.get("ref")).toBe("campaign");
+    expect(redacted).not.toContain(secret);
+    expect(redactEndpointUrl(redacted)).toBe(redacted);
+  });
+
+  it("preserves harmless query names that contain partial credential words", () => {
+    const raw = "https://hooks.example.com/hook?ref=campaign&monkey=banana&countryCode=US";
+    expect(redactEndpointUrl(raw)).toBe(raw);
+  });
+
   it("preserves bracketed IPv6 hosts and ports", () => {
     const redacted = redactEndpointUrl(
       "https://[2001:db8::1]:8443/hooks?access_token=xyz",
@@ -96,6 +124,18 @@ describe("buildDeliveryLogEndpointFields", () => {
     );
     expect(fields.encryptedDestination).toBeNull();
     expect(fields.encryptionKeyVersion).toBeNull();
+  });
+
+  it("keeps credential query values out of new stored and public identities", () => {
+    clearEnv();
+    const secret = "REPRO_ONLY_QUERY_SECRET_9204";
+    const fields = buildDeliveryLogEndpointFields(
+      `https://hooks.example.com/hook?accessToken=${secret}&ref=campaign`,
+    );
+    expect(fields.url).toBe(fields.endpointIdentity);
+    expect(fields.url).not.toContain(secret);
+    expect(publicDeliveryLogEndpoint(fields).endpointIdentity).toBe(fields.endpointIdentity);
+    expect(new URL(fields.endpointIdentity).searchParams.get("accessToken")).toBe("[REDACTED]");
   });
 
   it("encrypts destination when key is configured", () => {
@@ -252,6 +292,38 @@ describe("TTL / retention", () => {
 });
 
 describe("publicDeliveryLogEndpoint", () => {
+  it.each(["token", "accessToken", "auth[token]"])(
+    "redacts previously stored endpointIdentity credentials before public output: %s",
+    (key) => {
+      const secret = "REPRO_ONLY_QUERY_SECRET_9204";
+      const params = new URLSearchParams({ [key]: secret, ref: "campaign" });
+      const pub = publicDeliveryLogEndpoint({
+        endpointIdentity: `https://user:pass@hooks.example.com/hook?${params}#private`,
+        url: "https://legacy.example.com/ignored",
+      });
+      const endpoint = new URL(pub.endpointIdentity);
+      expect(endpoint.origin).toBe("https://hooks.example.com");
+      expect(endpoint.username).toBe("");
+      expect(endpoint.password).toBe("");
+      expect(endpoint.hash).toBe("");
+      expect(endpoint.searchParams.get(key)).toBe("[REDACTED]");
+      expect(endpoint.searchParams.get("ref")).toBe("campaign");
+      expect(pub.endpointIdentity).not.toContain(secret);
+      expect(publicDeliveryLogEndpoint(pub)).toEqual(pub);
+    },
+  );
+
+  it("does not echo a malformed stored endpoint identity", () => {
+    const pub = publicDeliveryLogEndpoint({
+      endpointIdentity: "not a url user:REPRO_ONLY_QUERY_SECRET_9204@host",
+    });
+    expect(pub.endpointIdentity).toBe("[invalid-url]");
+    expect(publicDeliveryLogEndpoint(pub)).toEqual(pub);
+    const unknown = publicDeliveryLogEndpoint({});
+    expect(unknown.endpointIdentity).toBe("[unknown]");
+    expect(publicDeliveryLogEndpoint(unknown)).toEqual(unknown);
+  });
+
   it("never exposes credential-bearing URLs", () => {
     const pub = publicDeliveryLogEndpoint({
       deliveryId: "del-1",

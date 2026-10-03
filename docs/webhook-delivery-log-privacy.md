@@ -25,9 +25,17 @@ bounded window and then removed.
 1. **Userinfo** — always stripped (`https://user:pass@host/...` → `https://host/...`).
 2. **Sensitive query keys** — values replaced with `[REDACTED]` for keys such as
    `token`, `api_key`, `secret`, `password`, `auth`, `access_token`, `signature`,
-   and common `*_token` / `*_secret` / `*_key` patterns. Harmless params (e.g. `ref`)
-   are kept.
+   and common `*_token` / `*_secret` / `*_key` patterns. Credential names also
+   match camelCase and nested query syntax, such as `accessToken`, `clientSecret`,
+   `auth[token]`, and `credentials.password`, including duplicate parameters and
+   percent-encoded names. Harmless params (e.g. `ref`) are kept.
 3. **Malformed URLs** — stored as `[invalid-url]` (never echo the raw input).
+
+Public projections apply the current redaction rules again to both stored
+`endpointIdentity` and legacy `url` fields. This protects API and reconciliation
+output from older records that retained credentials under earlier rules. It does
+not rewrite those stored records; retention and any operator-led migration still
+govern the original data.
 
 ## Encryption (optional)
 

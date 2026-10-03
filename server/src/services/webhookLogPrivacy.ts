@@ -77,6 +77,10 @@ const SENSITIVE_QUERY_KEYS = new Set(
   ].map((k) => k.toLowerCase()),
 );
 
+const COMPACT_SENSITIVE_QUERY_KEYS = new Set(
+  [...SENSITIVE_QUERY_KEYS].map((key) => key.replace(/[^a-z0-9]/g, "")),
+);
+
 function parseTtlDays(): number {
   const raw = process.env.WEBHOOK_DELIVERY_LOG_TTL_DAYS;
   if (raw == null || raw === "") return DEFAULT_DELIVERY_LOG_TTL_DAYS;
@@ -92,10 +96,17 @@ export function computeDeliveryLogExpiresAt(from: Date = new Date()): Date {
 }
 
 function isSensitiveQueryKey(key: string): boolean {
-  const lower = key.toLowerCase();
-  if (SENSITIVE_QUERY_KEYS.has(lower)) return true;
-  return /(?:^|[_-])(token|secret|password|passwd|auth|key|sig|signature)(?:$|[_-])/i.test(
-    lower,
+  // Recognize the same credential names in snake_case, camelCase, or nested
+  // query syntax. URLSearchParams has already decoded percent-encoded names.
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase();
+  if (COMPACT_SENSITIVE_QUERY_KEYS.has(words.replace(/[^a-z0-9]/g, ""))) {
+    return true;
+  }
+  return /(?:^|[^a-z0-9])(token|secret|password|passwd|pwd|auth|authorization|key|sig|signature|hmac|session|jwt|bearer|otp)(?:$|[^a-z0-9])/.test(
+    words,
   );
 }
 
@@ -386,9 +397,13 @@ export function publicDeliveryLogEndpoint(log: {
   errorCode: string | null;
   lastError: string | null;
 } {
+  // Existing records may have been written before the current redaction rules.
+  // Apply those rules to either stored field before exposing the identity.
+  const rawIdentity = log.endpointIdentity || log.url;
   const identity =
-    (log.endpointIdentity && String(log.endpointIdentity)) ||
-    (log.url ? redactEndpointUrl(String(log.url)) : "[unknown]");
+    rawIdentity && rawIdentity !== "[unknown]"
+      ? redactEndpointUrl(String(rawIdentity))
+      : "[unknown]";
   const errorCode =
     log.errorCode == null
       ? null
