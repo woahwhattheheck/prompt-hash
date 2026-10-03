@@ -154,6 +154,38 @@ describe("file-backed durable reviews", () => {
     expect(await reloaded.countAll()).toBe(1);
   });
 
+  it.each([
+    ["unsupported version", (reviews: StoredReview[]) => ({ version: 2, reviews })],
+    ["missing version", (reviews: StoredReview[]) => ({ reviews })],
+    ["non-array reviews", (reviews: StoredReview[]) => ({ version: 1, reviews: { saved: reviews } })],
+    ["top-level array", (reviews: StoredReview[]) => reviews],
+    ["null", () => null],
+  ] as const)("preserves an incompatible snapshot: %s", async (_label, incompatibleSnapshot) => {
+    const created = await repo.addReview(
+      "42",
+      "GSAVEDREVIEW",
+      5,
+      "This persisted review must survive a rejected snapshot.",
+    );
+    const valid = await fs.readFile(storePath, "utf8");
+    const raw = JSON.stringify(incompatibleSnapshot([created]));
+    await fs.writeFile(storePath, raw, "utf8");
+
+    await expect(repo.listByPrompt("42")).rejects.toThrow("Invalid review store snapshot");
+    expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+    await expect(
+      repo.addReview("42", "GNEWREVIEW", 4, "A new review must not overwrite stored data."),
+    ).rejects.toThrow("Invalid review store snapshot");
+    expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+    await expect(repo.removeSeedRecords()).rejects.toThrow("Invalid review store snapshot");
+    expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+
+    // A rejected snapshot releases the path lock, so restoring valid data recovers.
+    await fs.writeFile(storePath, valid, "utf8");
+    expect(await repo.getById(created.id, "42")).toEqual(created);
+    expect(await fs.readFile(storePath, "utf8")).toBe(valid);
+  });
+
   it("keeps two repository instances consistent on one durable path", async () => {
     const a = createFileReviewRepository(storePath);
     const b = createFileReviewRepository(storePath);

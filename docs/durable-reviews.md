@@ -16,6 +16,14 @@ Review submission, reports, and moderation no longer use a process-local seeded 
 - **Atomic transitions:** report appends only if the reporter is new; moderation applies in one update.
 - **No production seed:** fictional `review_1`…`review_3` rows are never inserted on boot. Migration `003_durable_reviews_remove_seeds.ts` deletes leftovers and backfills `status` / `reports` / `reviewId`.
 
+## File-store recovery
+
+A missing file initializes an empty version-1 snapshot. An existing snapshot must
+have `version: 1` and a `reviews` array; incompatible envelopes and invalid JSON
+reject reads and mutations, including seed cleanup, without changing the stored
+bytes. Restore a compatible snapshot before retrying. The explicit `clear()`
+test/reset operation still replaces the snapshot intentionally.
+
 ## Public API
 
 `api/reviews/{submit,list,report,moderate}` await the repository. Public list excludes `hidden` and strips report payloads.

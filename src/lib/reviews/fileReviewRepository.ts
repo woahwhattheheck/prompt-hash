@@ -36,7 +36,7 @@ async function readSnapshot(filePath: string): Promise<FileSnapshot> {
     const raw = await fs.readFile(filePath, "utf8");
     const parsed = JSON.parse(raw) as FileSnapshot;
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.reviews)) {
-      return emptySnapshot();
+      throw new Error("Invalid review store snapshot");
     }
     return parsed;
   } catch (err: unknown) {
