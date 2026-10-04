@@ -1,0 +1,48 @@
+name: Seller wallet isolation acceptance
+
+on:
+  push:
+    branches:
+      - verify/seller-wallet-switch-20261004
+
+permissions:
+  contents: read
+
+jobs:
+  wallet:
+    name: Exact source wallet interaction
+    if: github.repository == 'woahwhattheheck/prompt-hash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASELINE_REF: 1ecee476f69cb49b969ba57dafd595afc6fcf544
+      CANDIDATE_REF: f962fa3afb71b5f2c5b5b67359abf4790b892c1e
+    steps:
+      - name: Check out isolated execution revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install the focused renderer and test runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/seller-wallet-runtime"
+          mkdir -p "$runtime" acceptance-results
+          printf '{"private":true,"type":"module"}\n' > "$runtime/package.json"
+          npm install --prefix "$runtime" --ignore-scripts --no-audit --no-fund --no-package-lock --save-exact vitest@4.1.10 vite@8.1.5 react@19.2.5 react-dom@19.2.5 @testing-library/react@16.3.2 @testing-library/dom@10.4.1 jsdom@29.1.1
+          ln -s "$runtime/node_modules" node_modules
+          npm ls --prefix "$runtime" --all --json > acceptance-results/runtime-dependencies.json
+      - name: Verify seven cases and the previous hook failure
+        run: node scripts/seller-wallet-acceptance.mjs
+      - name: Retain exact source and execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seller-wallet-isolation
+          path: acceptance-results/
+          if-no-files-found: error
+          retention-days: 7
