@@ -28,7 +28,10 @@ bounded window and then removed.
    and common `*_token` / `*_secret` / `*_key` patterns. Credential names also
    match camelCase and nested query syntax, such as `accessToken`, `clientSecret`,
    `auth[token]`, and `credentials.password`, including duplicate parameters and
-   percent-encoded names. Harmless params (e.g. `ref`) are kept.
+   percent-encoded names. Compact credential aliases are also checked within each
+   bracketed or dotted component: `credentials[apikey]`, `credentials.privatekey`,
+   `credentials[sessionid]`, and `oauth[code]` are redacted. Harmless names with
+   partial credential words, such as `monkey` and `countryCode`, are kept.
 3. **Malformed URLs** — stored as `[invalid-url]` (never echo the raw input).
 
 Public projections apply the current redaction rules again to both stored

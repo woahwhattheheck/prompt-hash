@@ -66,6 +66,10 @@ describe("redactEndpointUrl", () => {
     "credentials.password",
     "credentials[accessToken]",
     "params[jwt]",
+    "credentials[apikey]",
+    "credentials.privatekey",
+    "credentials[sessionid]",
+    "oauth[code]",
   ])("redacts credential query key %s", (key) => {
     const secret = "REPRO_ONLY_QUERY_SECRET_9204";
     const params = new URLSearchParams({ [key]: secret, ref: "campaign" });
@@ -316,7 +320,15 @@ describe("TTL / retention", () => {
 });
 
 describe("publicDeliveryLogEndpoint", () => {
-  it.each(["token", "accessToken", "auth[token]"])(
+  it.each([
+    "token",
+    "accessToken",
+    "auth[token]",
+    "credentials[apikey]",
+    "credentials.privatekey",
+    "credentials[sessionid]",
+    "oauth[code]",
+  ])(
     "redacts previously stored endpointIdentity credentials before public output: %s",
     (key) => {
       const secret = "REPRO_ONLY_QUERY_SECRET_9204";

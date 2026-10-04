@@ -105,6 +105,14 @@ function isSensitiveQueryKey(key: string): boolean {
   if (COMPACT_SENSITIVE_QUERY_KEYS.has(words.replace(/[^a-z0-9]/g, ""))) {
     return true;
   }
+  // A compact alias may be one component of a bracketed or dotted key.
+  if (/[.[\]]/.test(words)) {
+    for (const part of words.split(/[.[\]]+/)) {
+      if (COMPACT_SENSITIVE_QUERY_KEYS.has(part.replace(/[^a-z0-9]/g, ""))) {
+        return true;
+      }
+    }
+  }
   return /(?:^|[^a-z0-9])(token|secret|password|passwd|pwd|auth|authorization|key|sig|signature|hmac|session|jwt|bearer|otp)(?:$|[^a-z0-9])/.test(
     words,
   );
