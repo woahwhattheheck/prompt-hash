@@ -14,6 +14,7 @@ const REQUIRED = [
     file: "api/prompts/version.ts",
     mustInclude: ["promptVersioningDomain", "domainResult"],
     forbid: [
+      /\.message\b/,
       /function\s+isAdminRequest\s*\(/,
       /function\s+validateSigned\w*\s*\(/,
       /Purchase\.findOne/,
@@ -25,6 +26,7 @@ const REQUIRED = [
     file: "api/webhooks/index.ts",
     mustInclude: ["webhookDomain", "domainResult"],
     forbid: [
+      /\.message\b/,
       /function\s+isAdminRequest\s*\(/,
       /function\s+validateSigned\w*\s*\(/,
       /WebhookSubscription\.(findOne|deleteOne|create)/,
@@ -35,6 +37,7 @@ const REQUIRED = [
     file: "server/src/controllers/versioningControllers.ts",
     mustInclude: ["promptVersioningDomain", "domainResult"],
     forbid: [
+      /\.message\b/,
       /Purchase\.findOne/,
       /PromptVersion\.findOne/,
       /publishPromptVersion\s*\(/,
@@ -45,6 +48,7 @@ const REQUIRED = [
     file: "server/src/controllers/webhookControllers.ts",
     mustInclude: ["webhookDomain", "domainResult"],
     forbid: [
+      /\.message\b/,
       /function\s+isAdminRequest\s*\(/,
       /function\s+validateSigned\w*\s*\(/,
       /WebhookSubscription\.(findOne|deleteOne)/,
