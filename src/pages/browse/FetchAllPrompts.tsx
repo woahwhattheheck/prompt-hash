@@ -141,24 +141,6 @@ const FetchAllPrompts = ({
     },
   });
 
-  // Infinite scroll observer
-  useEffect(() => {
-    if (!ENABLE_INFINITE_SCROLL || !loadMoreRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const target = entries[0];
-        if (target.isIntersecting && currentPage < totalPages) {
-          setCurrentPage((prev) => prev + 1);
-        }
-      },
-      { threshold: 0.1, rootMargin: "100px" },
-    );
-
-    observer.observe(loadMoreRef.current);
-    return () => observer.disconnect();
-  }, [currentPage]);
-
   const accessQueries = useQueries({
     queries: (address ? (promptsQuery.data ?? []) : []).map((prompt) => ({
       queryKey: ["prompt-access", address, prompt.id.toString()],
@@ -273,6 +255,24 @@ const FetchAllPrompts = ({
         (currentPage - 1) * ITEMS_PER_PAGE,
         currentPage * ITEMS_PER_PAGE,
       );
+
+  // Infinite scroll observer
+  useEffect(() => {
+    if (!ENABLE_INFINITE_SCROLL || !loadMoreRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const target = entries[0];
+        if (target.isIntersecting && currentPage < totalPages) {
+          setCurrentPage((prev) => prev + 1);
+        }
+      },
+      { threshold: 0.1, rootMargin: "100px" },
+    );
+
+    observer.observe(loadMoreRef.current);
+    return () => observer.disconnect();
+  }, [currentPage, totalPages, promptsQuery.isLoading, promptsQuery.isError]);
 
   useEffect(() => {
     setCurrentPage(1);
