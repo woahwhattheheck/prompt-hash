@@ -1,0 +1,325 @@
+name: PR277 refund-period reconciliation
+on:
+  push:
+    branches: [validation/ph277-wallet-state-20261004]
+    paths: [.github/workflows/ph277-refund-period-once.yml]
+permissions:
+  contents: write
+concurrency:
+  group: ph277-refund-period-once
+  cancel-in-progress: false
+jobs:
+  refund-period:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mongo:
+        image: mongo:7.0.14
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping: 1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TARGET_BRANCH: digit/issue-245-seller-payout-statements
+      PAYOUT_REFUND_MONGO_URI: mongodb://127.0.0.1:27017
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Select the fresh original submission and preserve the comparison source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$TARGET_BRANCH"
+          git checkout --detach FETCH_HEAD
+          test "$(git hash-object server/src/services/payoutStatementService.ts)" = cf10b3a6ac44f213db14bfaa090921529c5a9c23
+          echo "PRODUCT_BASE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          cp server/src/services/payoutStatementService.ts "$RUNNER_TEMP/payout-before.ts"
+          echo "PAYOUT_REFUND_BEFORE=$RUNNER_TEMP/payout-before.ts" >> "$GITHUB_ENV"
+      - name: Apply the recorded-refund-date selection and retained-source checker
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server/src/services/payoutStatementService.ts')
+          source = p.read_text()
+          old = '''  // Refunds that completed in this period (may claw back prior sales).
+            const refundRecords = await FulfillmentRecord.find({
+              promptId: { $in: onChainIds },
+              status: "refunded",
+              updatedAt: { $gte: periodStartDate, $lte: periodEndDate },
+            }).lean();'''
+          new = '''  // Include the recorded refund transition even if a later metadata write
+            // moved updatedAt. Keep the old date window for legacy records; after
+            // resolving the audit timestamp below, filter again before lookups.
+            const refundRecords = await FulfillmentRecord.find({
+              promptId: { $in: onChainIds },
+              status: "refunded",
+              $or: [
+                { updatedAt: { $gte: periodStartDate, $lte: periodEndDate } },
+                { auditLog: { $elemMatch: {
+                  status: "refunded", at: { $gte: periodStartDate, $lte: periodEndDate },
+                } } },
+              ],
+            }).lean();'''
+          assert source.count(old) == 1
+          source = source.replace(old, new, 1)
+          old = '''  type RefundRecord = {
+              promptId: string;
+              buyerWallet: string;
+              updatedAt: Date | string;
+              createdAt: Date | string;
+            };'''
+          new = '''  type RefundRecord = {
+              promptId: string;
+              buyerWallet: string;
+              updatedAt: Date | string;
+              createdAt: Date | string;
+              auditLog?: Array<{ status?: string; at?: Date | string | null }> | null;
+            };'''
+          assert source.count(old) == 1
+          source = source.replace(old, new, 1)
+          old = '  const records = refundRecords as RefundRecord[];'
+          new = '''  const records = (refundRecords as RefundRecord[]).map((record) => {
+              // There is one entitlement per prompt/buyer pair. Repeated status
+              // writes must not move its original completed refund to a new period.
+              let firstRefundAt: number | undefined;
+              for (const entry of record.auditLog ?? []) {
+                if (entry.status !== "refunded") continue;
+                const at = entry.at instanceof Date ? entry.at.getTime()
+                  : typeof entry.at === "string" ? Date.parse(entry.at) : NaN;
+                if (Number.isFinite(at) && (firstRefundAt === undefined || at < firstRefundAt)) {
+                  firstRefundAt = at;
+                }
+              }
+              // Older/imported rows without a usable transition retain their
+              // existing updatedAt fallback; no historical date is manufactured.
+              return { ...record, refundedAt: new Date(firstRefundAt ?? record.updatedAt).toISOString() };
+            }).filter((record) => isWithinPeriod(
+              record.refundedAt, options.periodStart, options.periodEnd,
+            ));'''
+          assert source.count(old) == 1
+          source = source.replace(old, new, 1)
+          old = '      refundedAt: new Date(f.updatedAt).toISOString(),'
+          assert source.count(old) == 1
+          source = source.replace(old, '      refundedAt: f.refundedAt,', 1)
+          p.write_text(source)
+          PY
+          cat > server/scripts/checkPayoutRefundPeriod.cjs <<'JS'
+          /** Focused integration check against a disposable loopback MongoDB. */
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const os = require('node:os');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const ts = require('typescript');
+          const mongoose = require('mongoose');
+          const server = path.resolve(__dirname, '..');
+          const uri = process.env.PAYOUT_REFUND_MONGO_URI;
+          if (!uri || !['127.0.0.1', 'localhost', '[::1]'].includes(new URL(uri).hostname)) {
+            throw new Error('PAYOUT_REFUND_MONGO_URI must identify a disposable loopback MongoDB');
+          }
+          if (!process.env.PAYOUT_REFUND_BEFORE) throw new Error('Set PAYOUT_REFUND_BEFORE to the preceding complete service source');
+          const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'ph277-refund-'));
+          const sourcePath = 'src/services/payoutStatementService.ts';
+          const beforeText = fs.readFileSync(process.env.PAYOUT_REFUND_BEFORE, 'utf8');
+          const afterText = fs.readFileSync(path.join(server, sourcePath), 'utf8');
+          const blob = (text) => crypto.createHash('sha1').update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest('hex');
+          const compile = (relative, text) => {
+            const target = path.join(temporary, relative.replace(/\.ts$/, '.js'));
+            fs.mkdirSync(path.dirname(target), {recursive: true});
+            fs.writeFileSync(target, ts.transpileModule(text, {compilerOptions: {
+              target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true,
+            }}).outputText);
+            return target;
+          };
+          fs.symlinkSync(path.dirname(path.dirname(require.resolve('mongoose/package.json'))), path.join(temporary, 'node_modules'), 'dir');
+          for (const relative of ['src/constants/platformFee.ts', 'src/models/User.ts', 'src/models/Prompt.ts', 'src/models/Purchase.ts', 'src/models/FulfillmentRecord.ts']) {
+            compile(relative, fs.readFileSync(path.join(server, relative), 'utf8'));
+          }
+          const before = require(compile('src/services/before.ts', beforeText));
+          const after = require(compile(sourcePath, afterText));
+          const User = require(path.join(temporary, 'src/models/User.js')).default;
+          const Prompt = require(path.join(temporary, 'src/models/Prompt.js')).default;
+          const Purchase = require(path.join(temporary, 'src/models/Purchase.js')).default;
+          const Fulfillment = require(path.join(temporary, 'src/models/FulfillmentRecord.js')).default;
+          const dbName = `ph277_refund_${crypto.randomBytes(8).toString('hex')}`;
+          const jan = ['2026-01-01T00:00:00.000Z', '2026-01-31T23:59:59.999Z'];
+          const feb = ['2026-02-01T00:00:00.000Z', '2026-02-28T23:59:59.999Z'];
+          const historical = new Date('2025-12-15T12:00:00.000Z');
+          const janRefund = new Date('2026-01-20T12:00:00.000Z');
+          const febEdit = new Date('2026-02-10T12:00:00.000Z');
+          const rows = [];
+          let queries = [];
+          mongoose.set('debug', (collection, method, query) => { if (method === 'find' || method === 'findOne') queries.push({collection, method, query}); });
+          async function seed(auditLog, updatedAt, count = 1, status = 'refunded') {
+            await Purchase.deleteMany({});
+            await Fulfillment.deleteMany({});
+            await Purchase.collection.insertMany(Array.from({length: count}, (_, i) => ({
+              promptId: 'Prompt-A', buyerWallet: `buyer-${i}`, versionIndex: 1,
+              createdAt: historical, updatedAt: historical,
+            })));
+            await Fulfillment.collection.insertMany(Array.from({length: count}, (_, i) => ({
+              promptId: 'Prompt-A', buyerWallet: `buyer-${i}`, status,
+              createdAt: historical, updatedAt, ...(auditLog === undefined ? {} : {auditLog}),
+            })));
+          }
+          const normalized = (statement) => ({...statement, statementId: 'fixed', generatedAt: 'fixed', signature: 'fixed'});
+          async function compare(name, period, oldCount, newCount, expectedAt, expectedQueries) {
+            const options = {sellerWallet: 'GSELLER', periodStart: period[0], periodEnd: period[1], priorSettledPeriodEnd: '2025-12-31T23:59:59.999Z'};
+            queries = [];
+            const previous = await before.aggregateSellerStatementFromDb(options);
+            const oldQueries = queries.length;
+            queries = [];
+            const current = await after.aggregateSellerStatementFromDb(options);
+            const newQueries = queries.length;
+            assert.equal(previous.refunds.length, oldCount, `${name}: original count`);
+            assert.equal(current.refunds.length, newCount, `${name}: repaired count`);
+            assert.equal(current.refundSellerDebitStroops, newCount * 95_000_000, `${name}: seller debit`);
+            assert.equal(current.netSettlementStroops, -newCount * 95_000_000 || 0, `${name}: settlement`);
+            for (const refund of current.refunds) {
+              assert.equal(refund.isClawback, true);
+              if (expectedAt) assert.equal(refund.refundedAt, expectedAt);
+            }
+            if (oldCount === newCount) assert.deepEqual(normalized(current), normalized(previous), `${name}: full control statement`);
+            if (expectedQueries !== undefined) assert.equal(newQueries, expectedQueries, `${name}: query count`);
+            rows.push({name, original_refunds: oldCount, repaired_refunds: newCount, original_queries: oldQueries, repaired_queries: newQueries});
+          }
+          (async () => {
+            try {
+              await mongoose.connect(uri, {dbName});
+              await Promise.all([User.init(), Prompt.init(), Purchase.init(), Fulfillment.init()]);
+              const owner = new mongoose.Types.ObjectId();
+              await User.collection.insertOne({_id: owner, walletAddress: 'gseller', payoutSettings: {payoutAddress: 'gdest'}});
+              await Prompt.collection.insertOne({owner, onChainId: 'Prompt-A', price: 10});
+              await seed([{status: 'refunded', at: janRefund}], janRefund);
+              await compare('ordinary January refund', jan, 1, 1, janRefund.toISOString(), 5);
+              await seed([{status: 'refunded', at: janRefund}], febEdit);
+              await compare('later edit does not remove January refund', jan, 0, 1, janRefund.toISOString(), 5);
+              await compare('later edit does not debit February again', feb, 1, 0, undefined, 4);
+              await seed([{status: 'refunded', at: febEdit}, {status: 'refunded', at: janRefund}], febEdit);
+              await compare('earliest transition despite reordered repeated writes', jan, 0, 1, janRefund.toISOString());
+              await compare('later repeated transition is not another refund', feb, 1, 0);
+              await seed(undefined, febEdit);
+              await compare('legacy missing audit keeps previous behavior', feb, 1, 1, febEdit.toISOString());
+              await seed([{status: 'delivered', at: janRefund}, {status: 'refunded', at: null}], febEdit);
+              await compare('no usable refund audit keeps legacy fallback', feb, 1, 1, febEdit.toISOString());
+              for (const boundary of jan) {
+                await seed([{status: 'refunded', at: new Date(boundary)}], febEdit);
+                await compare(`inclusive boundary ${boundary}`, jan, 0, 1, boundary);
+              }
+              await seed([{status: 'refunded', at: new Date('2026-03-01T00:00:00.000Z')}], febEdit);
+              await compare('record edit cannot pull a March refund into February', feb, 1, 0);
+              await seed([{status: 'refunded', at: janRefund}], febEdit, 1, 'delivered');
+              await compare('current non-refunded state remains excluded', jan, 0, 0);
+              await seed([{status: 'refunded', at: janRefund}], febEdit, 101);
+              await compare('101 refunds preserve bounded purchase lookup', jan, 0, 101, janRefund.toISOString(), 6);
+              await compare('filtered old refunds need no historical purchase lookup', feb, 101, 0, undefined, 4);
+              await seed([{status: 'refunded', at: janRefund}], janRefund);
+              const now = new Date();
+              await Fulfillment.findOneAndUpdate({promptId: 'Prompt-A', buyerWallet: 'buyer-0'}, {
+                $set: {status: 'refunded', failureReason: 'later metadata correction'},
+                $push: {auditLog: {status: 'refunded', note: 'later metadata correction', at: now}},
+              });
+              await compare('real model status write retains first refund period', jan, 0, 1, janRefund.toISOString());
+              const day = now.toISOString().slice(0, 10);
+              await compare('real model status write is not a new current-day refund', [`${day}T00:00:00.000Z`, `${day}T23:59:59.999Z`], 1, 0);
+              const mongo = await mongoose.connection.db.admin().command({buildInfo: 1});
+              console.log(JSON.stringify({runtime: process.version, mongoose: mongoose.version, mongodb: mongo.version,
+                before_blob: blob(beforeText), after_blob: blob(afterText), comparisons: rows.length, rows,
+                limits: 'Real disposable MongoDB queries and production models; controlled records, no HTTP route or blockchain execution.'}, null, 2));
+            } finally {
+              if (mongoose.connection.readyState === 1) await mongoose.connection.dropDatabase();
+              await mongoose.disconnect();
+              fs.rmSync(temporary, {recursive: true, force: true});
+            }
+          })().catch((error) => { console.error(error); process.exitCode = 1; });
+          JS
+          cat > docs/payout-refund-period.md <<'MD'
+          # Refund period stability
+
+          The fulfillment resolution route records an `auditLog` entry with status
+          `refunded` and a timestamp. A subsequent status/metadata write can change
+          `updatedAt` and append another audit entry without creating another
+          purchase entitlement. Previously, statement aggregation selected only
+          `updatedAt` and also used it as the refund date, so one completed refund
+          could disappear from its original period and reappear as a later debit.
+
+          Aggregation now considers either an in-period refund audit entry or the
+          legacy updatedAt window. It resolves the earliest usable recorded
+          `refunded` transition and filters by that date before historical purchase
+          lookups. Reordered or repeated status entries therefore do not move the
+          completed refund. Rows without a usable refund transition retain the old
+          updatedAt fallback; their missing history is not reconstructed or claimed
+          stable. This does not add on-chain verification or change refund authority.
+
+          Seller/prompt scope, current refunded status, inclusive period boundaries,
+          refund amounts, fees, clawback classification, and the existing 100-pair
+          purchase lookup batches are retained. The separate CSV text protection and
+          wallet-state isolation changes remain. The existing use of current stored
+          Prompt.price for gross amounts is unchanged; this repair does not supply
+          missing historical purchase prices.
+
+          ## Focused integration reproduction
+
+          `server/scripts/checkPayoutRefundPeriod.cjs` compiles only the complete
+          service, its existing constants and four model modules, then executes both
+          the preceding and repaired services against a unique disposable loopback
+          MongoDB database. It removes only its own database and temporary files.
+          Install the server's existing mongoose and typescript dependencies first.
+
+          ```bash
+          git show 668d0a50cf921537ce1ad78311b6432b8e8c3a9c:server/src/services/payoutStatementService.ts > /tmp/ph277-payout-before.ts
+          PAYOUT_REFUND_BEFORE=/tmp/ph277-payout-before.ts \
+            PAYOUT_REFUND_MONGO_URI=mongodb://127.0.0.1:27017 \
+            node server/scripts/checkPayoutRefundPeriod.cjs
+          ```
+
+          Fifteen controlled comparisons cover the original and later months,
+          ordinary/legacy records, repeated/reordered transitions, inclusive
+          boundaries, current-status filtering, 101-refund batching, and an actual
+          Mongoose metadata/status update. The script prints both source blob hashes,
+          runtime/database versions, observed refund counts and model-query counts.
+          It also checks full control statements after normalizing only their
+          generated ID, generation timestamp and signature. This is not a full app
+          build, HTTP authorization test, blockchain settlement, or payment receipt.
+          MD
+      - name: Install only the existing compiler and database model dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RUNTIME="$RUNNER_TEMP/ph277-refund-runtime"
+          mkdir -p "$RUNTIME"
+          node <<'JS'
+          const fs = require('node:fs');
+          const lock = JSON.parse(fs.readFileSync('server/package-lock.json', 'utf8'));
+          const dependencies = Object.fromEntries(['mongoose', 'typescript'].map(name => {
+            const version = lock.packages[`node_modules/${name}`]?.version;
+            if (!version) throw new Error(`Missing locked dependency ${name}`);
+            return [name, version];
+          }));
+          fs.writeFileSync(`${process.env.RUNTIME}/package.json`, JSON.stringify({private:true,dependencies}, null, 2));
+          console.log(dependencies);
+          JS
+          npm install --prefix "$RUNTIME" --ignore-scripts --no-audit --no-fund
+          ln -s "$RUNTIME/node_modules" server/node_modules
+      - name: Run one focused real-Mongo comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          node server/scripts/checkPayoutRefundPeriod.cjs 2>&1 | tee "$RUNNER_TEMP/ph277-refund-result.log"
+      - name: Publish only the completed source, checker and explanation
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '\nCompleted validation: https://github.com/%s/actions/runs/%s\n\nPreceding source: `%s`. The single focused job passed all 15 comparisons on a disposable MongoDB 7.0.14 service. No full repository suite was run.\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$PRODUCT_BASE" >> docs/payout-refund-period.md
+          git config user.name woahwhattheheck
+          git config user.email 293286387+woahwhattheheck@users.noreply.github.com
+          git add -- server/src/services/payoutStatementService.ts server/scripts/checkPayoutRefundPeriod.cjs docs/payout-refund-period.md
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git diff --cached --check
+          git -c core.hooksPath=/dev/null commit -m 'fix(payouts): keep completed refunds in their recorded period [skip ci]' -m "Use the earliest recorded refund transition before the legacy updatedAt fallback. Filter before historical purchase lookup so later metadata writes cannot debit another period. Preserve fees, source scope, clawbacks, the 100-pair lookup batches, CSV text handling and wallet state isolation. Fifteen real-Mongo comparisons passed in the single focused job. No blockchain or full app build result. Base: $PRODUCT_BASE. Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}
+          git show --stat --oneline HEAD
