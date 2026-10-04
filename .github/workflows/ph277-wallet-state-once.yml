@@ -1,0 +1,221 @@
+name: PR277 wallet-state repair
+on:
+  push:
+    branches: [validation/ph277-wallet-state-20261004]
+    paths: [.github/workflows/ph277-wallet-state-once.yml]
+permissions:
+  contents: write
+concurrency:
+  group: ph277-wallet-state-once
+  cancel-in-progress: false
+jobs:
+  wallet-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CI: 'true'
+      HUSKY: '0'
+      TARGET_BRANCH: digit/issue-245-seller-payout-statements
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Select fresh original submission and guard both source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$TARGET_BRANCH"
+          git checkout --detach FETCH_HEAD
+          echo "PRODUCT_BASE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          test "$(git hash-object src/components/profile/PayoutStatementsCard.tsx)" = 072e6601e5a5bca1366e34394d9370e7dd63655d
+          test "$(git hash-object src/components/profile/PayoutStatementsCard.test.tsx)" = a57a8428b8259475de4be4d8e72385f7e33b4456
+      - name: Apply wallet generation isolation and extend the existing component cases
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/components/profile/PayoutStatementsCard.tsx')
+          old = 'export function PayoutStatementsCard({\n  walletAddress,\n}: PayoutStatementsCardProps) {\n'
+          new = '''export function PayoutStatementsCard({
+            walletAddress,
+          }: PayoutStatementsCardProps) {
+            // A wallet change must discard both visible data and pending responses
+            // from the previous wallet's component generation.
+            return (
+              <WalletPayoutStatementsCard key={walletAddress} walletAddress={walletAddress} />
+            );
+          }
+
+          function WalletPayoutStatementsCard({
+            walletAddress,
+          }: PayoutStatementsCardProps) {
+          '''
+          source = p.read_text()
+          assert source.count(old) == 1
+          p.write_text(source.replace(old, new, 1))
+          t = Path('src/components/profile/PayoutStatementsCard.test.tsx')
+          source = t.read_text()
+          source = source.replace('import { screen, waitFor, within } from "@testing-library/react";', 'import { act, cleanup, render as renderWithProviders, screen, waitFor, within } from "@testing-library/react";')
+          source = source.replace('import { renderWithProviders } from "@/test/render";\n', '')
+          source = '// @vitest-environment jsdom\nimport "@testing-library/jest-dom/vitest";\n' + source
+          source = source.replace('  afterEach(() => {\n    vi.unstubAllGlobals();', '  afterEach(() => {\n    cleanup();\n    vi.unstubAllGlobals();', 1)
+          source += '''
+
+          describe("PayoutStatementsCard wallet isolation", () => {
+            const otherWallet = "GOTHERTESTWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+            function statement(statementId: string, sellerWallet: string) {
+              return {
+                statementId, sellerWallet, payoutAddress: sellerWallet,
+                period: { start: "2026-01-01T00:00:00.000Z", end: "2026-01-31T23:59:59.999Z" },
+                feeBps: 500, grossStroops: 100_000_000, platformFeeStroops: 5_000_000,
+                refundSellerDebitStroops: 0, clawbackStroops: 0,
+                previousBalanceCarryoverStroops: 0, netSettlementStroops: 95_000_000,
+                payableStroops: 95_000_000, closingBalanceCarryoverStroops: 0,
+                status: "pending", generatedAt: "2026-02-01T00:00:00.000Z",
+              };
+            }
+
+            function deferredResponse() {
+              let resolve!: (response: Response) => void;
+              const promise = new Promise<Response>((done) => { resolve = done; });
+              return { promise, resolve };
+            }
+
+            afterEach(() => {
+              cleanup();
+              vi.unstubAllGlobals();
+            });
+
+            it("clears the previous wallet's saved rows and preview immediately", async () => {
+              const next = deferredResponse();
+              vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+                const url = String(input);
+                if (url.includes(otherWallet)) return next.promise;
+                return url.includes("from=")
+                  ? Response.json({ statement: statement("preview_a", wallet) })
+                  : Response.json({ statements: [statement("saved_a", wallet)] });
+              }));
+              const user = userEvent.setup();
+              const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+              await screen.findByText("saved_a");
+              await user.click(screen.getByRole("button", { name: /preview period/i }));
+              await screen.findByText("preview_a");
+              view.rerender(<PayoutStatementsCard walletAddress={otherWallet} />);
+              expect(screen.queryByText("saved_a")).not.toBeInTheDocument();
+              expect(screen.queryByText("preview_a")).not.toBeInTheDocument();
+              expect(screen.queryByRole("button", { name: /save statement/i })).not.toBeInTheDocument();
+              await act(async () => {
+                next.resolve(Response.json({ statements: [statement("saved_b", otherWallet)] }));
+              });
+              await screen.findByText("saved_b");
+            });
+
+            it("ignores a saved-list response from a previous wallet generation", async () => {
+              const previous = deferredResponse();
+              vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+                return String(input).includes(otherWallet)
+                  ? Response.json({ statements: [statement("saved_b", otherWallet)] })
+                  : previous.promise;
+              }));
+              const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+              view.rerender(<PayoutStatementsCard walletAddress={otherWallet} />);
+              await screen.findByText("saved_b");
+              await act(async () => {
+                previous.resolve(Response.json({ statements: [statement("late_saved_a", wallet)] }));
+              });
+              expect(screen.getByText("saved_b")).toBeInTheDocument();
+              expect(screen.queryByText("late_saved_a")).not.toBeInTheDocument();
+            });
+
+            it("ignores a preview response that finishes after a wallet switch", async () => {
+              const previous = deferredResponse();
+              vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+                return String(input).includes("from=")
+                  ? previous.promise
+                  : Response.json({ statements: [] });
+              }));
+              const user = userEvent.setup();
+              const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+              await waitFor(() => expect(screen.getByRole("button", { name: /preview period/i })).toBeEnabled());
+              await user.click(screen.getByRole("button", { name: /preview period/i }));
+              view.rerender(<PayoutStatementsCard walletAddress={otherWallet} />);
+              await act(async () => {
+                previous.resolve(Response.json({ statement: statement("late_preview_a", wallet) }));
+              });
+              expect(screen.queryByText("late_preview_a")).not.toBeInTheDocument();
+              expect(screen.queryByRole("button", { name: /save statement/i })).not.toBeInTheDocument();
+              expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+            });
+
+            it("clears financial data on disconnect without requesting an empty wallet", async () => {
+              vi.stubGlobal("fetch", vi.fn(async () => Response.json({ statements: [statement("saved_a", wallet)] })));
+              const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+              await screen.findByText("saved_a");
+              const requestsBefore = vi.mocked(fetch).mock.calls.length;
+              view.rerender(<PayoutStatementsCard walletAddress="" />);
+              expect(screen.queryByText("saved_a")).not.toBeInTheDocument();
+              expect(screen.getByRole("button", { name: /preview period/i })).toBeDisabled();
+              expect(vi.mocked(fetch).mock.calls.length).toBe(requestsBefore);
+            });
+          });
+          '''
+          t.write_text(source)
+          PY
+          git diff --stat
+          git hash-object src/components/profile/PayoutStatementsCard.tsx src/components/profile/PayoutStatementsCard.test.tsx
+      - name: Install only the component test dependency closure from existing lock versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RUNTIME="$RUNNER_TEMP/ph277-component-runtime"
+          echo "RUNTIME=$RUNTIME" >> "$GITHUB_ENV"
+          mkdir -p "$RUNTIME"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const names = ['vitest','vite','@vitejs/plugin-react','jsdom','react','react-dom','@testing-library/react','@testing-library/dom','@testing-library/user-event','@testing-library/jest-dom','lucide-react','@radix-ui/react-slot','class-variance-authority','clsx','tailwind-merge'];
+          const dependencies = Object.fromEntries(names.map(name => {
+            const version = lock.packages?.[`node_modules/${name}`]?.version;
+            if (!version) throw new Error(`Missing retained lock version: ${name}`);
+            return [name, version];
+          }));
+          fs.writeFileSync(`${process.env.RUNTIME}/package.json`, JSON.stringify({private:true,type:'module',dependencies},null,2));
+          console.log(JSON.stringify(dependencies,null,2));
+          JS
+          npm install --prefix "$RUNTIME" --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+          ln -s "$RUNTIME/node_modules" node_modules
+          cat > "$RUNTIME/vitest.config.mjs" <<'JS'
+          import {defineConfig} from 'vitest/config';
+          import react from '@vitejs/plugin-react';
+          import path from 'node:path';
+          export default defineConfig({
+            root: process.env.GITHUB_WORKSPACE,
+            plugins: [react()],
+            resolve: {alias: {'@': path.join(process.env.GITHUB_WORKSPACE, 'src')}},
+            test: {environment: 'jsdom', globals: true, maxWorkers: 1},
+          });
+          JS
+      - name: Run only the existing payout component file
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          "$RUNTIME/node_modules/.bin/vitest" run --config "$RUNTIME/vitest.config.mjs" src/components/profile/PayoutStatementsCard.test.tsx 2>&1 | tee "$RUNNER_TEMP/ph277-wallet-tests.log"
+      - name: Publish exactly the two tested files to the original submission
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name woahwhattheheck
+          git config user.email 293286387+woahwhattheheck@users.noreply.github.com
+          git add -- src/components/profile/PayoutStatementsCard.tsx src/components/profile/PayoutStatementsCard.test.tsx
+          test "$(git diff --cached --name-only | wc -l)" -eq 2
+          git diff --cached --check
+          git -c core.hooksPath=/dev/null commit -m 'fix(payouts): isolate statement state when switching wallets [skip ci]' -m "Reset the card's state generation on wallet identity changes, preventing old saved-list and preview responses from entering the new wallet view. Preserve monetary formatting and backend behavior. Four wallet-switch regressions extend the six existing component cases. The self-contained card tests use real React/jsdom directly; unrelated application providers are not required. Focused validation used existing lock versions and a component-only Vite configuration, not a full application build. Base: $PRODUCT_BASE. Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "PUBLISHED_HEAD=$(git rev-parse HEAD)"
+          echo "PUBLISHED_TREE=$(git rev-parse HEAD^{tree})"
+          git show --format=fuller --stat HEAD
