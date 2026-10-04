@@ -233,6 +233,27 @@ const redactedAddress = String(address).slice(0, 8) + "...";
       String(promptId),
     );
 
+    // #239 requires every accepted unlock signature to bind the exact listing
+    // terms seen by the buyer. Older/unbound challenges must restart the flow.
+    if (!payload.termsHash || !payload.terms) {
+      req.logger.warn(
+        { address: redactedAddress, promptId },
+        "Unlock blocked: challenge is not bound to listing terms",
+      );
+      metrics.trackUnlockFailure(
+        String(address),
+        String(promptId),
+        "unbound_challenge",
+      );
+      res.status(401).json(
+        apiError(
+          ErrorCode.CHALLENGE_INVALID,
+          "This unlock session is no longer valid. Request a new challenge.",
+        ),
+      );
+      return;
+    }
+
     // 2. Prevent challenge token replay via globalNonceLedger
     const nonceConsumed = globalNonceLedger.consume(payload.nonce, payload.expiresAt);
     if (!nonceConsumed) {
