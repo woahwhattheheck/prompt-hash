@@ -202,6 +202,29 @@ describe("unlock listing terms binding (#239)", () => {
     expect(challenge.quote?.termsHash).toHaveLength(64);
   });
 
+  it("rejects an authenticated challenge that is not bound to listing terms", async () => {
+    const terms = sampleTerms();
+    const { buyer, promptId } = await setupBoundUnlock(terms);
+    const challenge = createChallengeToken(SECRET, buyer.publicKey(), promptId, {
+      now: Date.now(),
+    });
+    const signedMessage = Buffer.from(
+      buyer.sign(Buffer.from(challenge.challenge, "utf8")),
+    ).toString("base64");
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(401);
+    expect(responseData.code).toBe(ErrorCode.CHALLENGE_INVALID);
+    expect(resolveListingQuoteMock).not.toHaveBeenCalled();
+    expect(hasAccessMock).not.toHaveBeenCalled();
+  });
+
   it("rejects when price changed after challenge issuance", async () => {
     const terms = sampleTerms();
     const { buyer, promptId, challenge, signedMessage } =
