@@ -44,8 +44,22 @@ The expiry instant is exclusive: credentials are valid only while `now < exp`.
 
 | Variable | Purpose |
 | --- | --- |
-| `ADMIN_PRINCIPAL_SECRET` | HMAC secret (≥ 32 characters). Required in production. |
+| `ADMIN_PRINCIPAL_SECRET` | HMAC secret (≥ 32 characters). Required by the HTTP report-review gate in every environment, including local development. |
 | `ADMIN_PRINCIPAL_REVOKED_JTIS` | Optional comma-separated revoked `jti` values |
+
+Configure the same `ADMIN_PRINCIPAL_SECRET` in the trusted token issuer and the
+Express report server before minting or using reviewer credentials, including
+during local development. The example below reads this environment variable, and
+the [mounted report-review gate](../server/src/auth/reportReviewAuth.ts) uses it
+without a `secret` override.
+
+The [shared signer/verifier](../server/src/auth/adminPrincipal.ts) has no
+development fallback: a missing secret or one shorter than 32 characters causes
+`invalid_token`. When verification fails for this reason, the report service
+returns `401` before querying reports. Lower-level signer/verifier calls may pass
+an explicit `secret` option for isolated tests; that override does not configure
+the HTTP server. Keep the signing secret in trusted server/operator environments
+and send only the issued bearer token to the endpoint.
 
 Minting (operators / tests only — not a public endpoint):
 
