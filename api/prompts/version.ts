@@ -6,7 +6,7 @@
  * `src/lib/domain/promptVersioningDomain.ts` so Express stays in lockstep.
  */
 import { withObservability } from "../../src/lib/observability/wrapper";
-import { sendDomainResult } from "../../src/lib/domain/domainResult";
+import { internalServerError, sendDomainResult } from "../../src/lib/domain/domainResult";
 import { handlePromptVersionHttp } from "../../src/lib/domain/promptVersioningDomain";
 import {
   createPromptVersioningDeps,
@@ -22,8 +22,8 @@ async function handler(req: any, res: any) {
       body: req.body ?? {},
     });
     sendDomainResult(res, result);
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError());
   }
 }
 
