@@ -140,6 +140,8 @@ export class ServerLifecycle {
     let forced = false;
 
     const forcePromise = new Promise<"forced">((resolve) => {
+      // A pending disconnect promise does not keep Node alive. This deadline
+      // must remain referenced until cleanup completes or the force path runs.
       forceTimer = setTimeout(() => {
         forced = true;
         this.logger.error(
@@ -155,10 +157,6 @@ export class ServerLifecycle {
         }
         resolve("forced");
       }, this.shutdownTimeoutMs);
-      // Do not keep the event loop alive solely for the force timer in tests.
-      if (typeof (forceTimer as NodeJS.Timeout).unref === "function") {
-        (forceTimer as NodeJS.Timeout).unref();
-      }
     });
 
     try {

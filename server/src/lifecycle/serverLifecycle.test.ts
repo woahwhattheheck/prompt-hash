@@ -1,3 +1,6 @@
+import { spawnSync } from "child_process";
+import { readFileSync } from "fs";
+import { ModuleKind, ScriptTarget, transpileModule } from "typescript";
 import http from "http";
 import express from "express";
 import { ServerLifecycle, listenWithLifecycle } from "./serverLifecycle";
@@ -169,6 +172,65 @@ describe("ServerLifecycle", () => {
         clearTimeout(timeout);
         finishDisconnect();
         await shutdown;
+      }
+    },
+  );
+
+  it.each(["complete", "stalled"] as const)(
+    "keeps the shutdown deadline active for a %s disconnect in an isolated process",
+    (phase) => {
+      // Compile the actual helper with the project's TypeScript dependency, so
+      // this regression also runs on Node versions without native TS support.
+      const helper = transpileModule(
+        readFileSync(require.resolve("./serverLifecycle"), "utf8"),
+        {
+          compilerOptions: {
+            module: ModuleKind.CommonJS,
+            target: ScriptTarget.ES2020,
+          },
+        },
+      ).outputText;
+      const child = `
+        ${helper}
+        const http = require("http");
+        const write = (message) => require("fs").writeSync(1, message + "\\n");
+        const server = http.createServer((_req, res) => res.end("ok"));
+        server.listen(0, "127.0.0.1", () => {
+          const lifecycle = new exports.ServerLifecycle({
+            server,
+            shutdownTimeoutMs: 100,
+            disconnectDb: () => {
+              write("DISCONNECT_STARTED");
+              return ${phase === "stalled"} ? new Promise(() => {}) : Promise.resolve();
+            },
+            onForceExit: (code) => {
+              write("FORCE_EXIT:" + code);
+              process.exit(code);
+            },
+            logger: { info: write, warn: write, error: write },
+          });
+          lifecycle.installSignalHandlers();
+          // Windows does not deliver POSIX SIGTERM to the registered handler.
+          if (process.platform === "win32") process.emit("SIGTERM");
+          else process.kill(process.pid, "SIGTERM");
+        });
+      `;
+      const result = spawnSync(process.execPath, ["-e", child], {
+        encoding: "utf8",
+        timeout: 3000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("DISCONNECT_STARTED");
+      expect(result.status).toBe(phase === "stalled" ? 1 : 0);
+      if (phase === "stalled") {
+        expect(result.stdout).toContain("FORCE_EXIT:1");
+        expect(result.stdout).not.toContain("shutdown complete");
+      } else {
+        expect(result.stdout).toContain("shutdown complete");
+        expect(result.stdout).not.toContain("FORCE_EXIT:");
       }
     },
   );
