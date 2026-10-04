@@ -184,6 +184,49 @@ describe("POST /api/prompts/creator-session", () => {
   });
 });
 
+describe("GET /api/prompts — public projection", () => {
+  it("omits prompt content and non-public listing states", async () => {
+    chainFind([
+      {
+        _id: "published-1",
+        title: "Public listing",
+        content: "PRIVATE PUBLISHED CONTENT",
+        listingStatus: "published",
+        isActive: true,
+        owner: { username: "creator", walletAddress: "gcreator" },
+      },
+      {
+        _id: "draft-1",
+        title: "Draft listing",
+        content: "PRIVATE DRAFT CONTENT",
+        listingStatus: "draft",
+        isActive: true,
+      },
+      {
+        _id: "ready-1",
+        title: "Ready listing",
+        content: "PRIVATE READY CONTENT",
+        listingStatus: "ready",
+        isActive: true,
+      },
+    ]);
+
+    const res = await request(buildApp()).get("/api/prompts");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toEqual(
+      expect.objectContaining({
+        id: "published-1",
+        title: "Public listing",
+        listingStatus: "published",
+      }),
+    );
+    expect(res.body[0]).not.toHaveProperty("content");
+    expect(JSON.stringify(res.body)).not.toContain("PRIVATE");
+  });
+});
+
 describe("GET owned / drafts — cross-wallet matrix", () => {
   it("rejects unauthenticated owned read", async () => {
     const res = await request(buildApp()).get(
