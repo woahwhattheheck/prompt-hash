@@ -1,0 +1,17 @@
+{
+  "repository": "woahwhattheheck/prompt-hash",
+  "baseline_commit": "a9c7d579d5737456ec96064ea9a2796f56834bcf",
+  "candidate_commit": "6b0b8f70c18be2b89c6e7691f07983883dd389a7",
+  "baseline_service_blob": "b41e983f78d79080acdded85b185b42fecb0c5c1",
+  "candidate_service_blob": "3d249b8648de4e52dc4512ceca8bed85bd445ee5",
+  "file_blobs": {
+    "work/validation/ph277-mongo/payoutStatementService.before.ts": "b41e983f78d79080acdded85b185b42fecb0c5c1",
+    "server/src/services/payoutStatementService.ts": "3d249b8648de4e52dc4512ceca8bed85bd445ee5",
+    "server/src/constants/platformFee.ts": "e9001bbe60250837b171b95fb01a4fc9f5e8196c",
+    "work/validation/ph277-mongo/fixtures.mjs": "d5036564972d5ee2eb214a9ed4d48f8ea143d9e8",
+    "server/src/models/User.ts": "6621184c50cb6d311290427066323441c9ce8498",
+    "server/src/models/Prompt.ts": "b319b9287845522e95334014c4ff87311927eb03",
+    "server/src/models/Purchase.ts": "f8b01703cbb0ac6c142e4a0aa7e97b5a9cc37a53",
+    "server/src/models/FulfillmentRecord.ts": "a022db30513c8983e85400bdcfe6aaccdcf53a8f"
+  }
+}

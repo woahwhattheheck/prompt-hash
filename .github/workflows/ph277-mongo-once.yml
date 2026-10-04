@@ -1,0 +1,95 @@
+name: PH277 Mongo query-count and timing
+
+on:
+  push:
+    branches:
+      - validation/ph277-mongo-grantwatch-20261004
+    paths:
+      - .github/workflows/ph277-mongo-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  mongo:
+    if: github.repository == 'woahwhattheheck/prompt-hash' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      mongo:
+        image: mongo:7.0.14
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'if (db.adminCommand({ ping: 1 }).ok !== 1) quit(1)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PH277_MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+      PH277_OUTPUT_DIR: artifacts/ph277-mongo
+      PAYOUT_STATEMENT_SECRET: ph277-synthetic-only-no-production-use
+    steps:
+      - name: Check out the exact validation source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Use the existing recorded Node runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+
+      - name: Verify source pins and prepare adjacent baseline module
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import {readFileSync, mkdirSync, copyFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import assert from 'node:assert/strict';
+          const base = 'work/validation/ph277-mongo';
+          const pins = JSON.parse(readFileSync(`${base}/source-pins.json`, 'utf8'));
+          const hash = path => {const b = readFileSync(path); return createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex');};
+          for (const [path, sha] of Object.entries(pins.file_blobs)) assert.equal(hash(path), sha, path);
+          copyFileSync(`${base}/payoutStatementService.before.ts`, 'server/src/services/payoutStatementService.before.generated.ts');
+          mkdirSync(process.env.PH277_OUTPUT_DIR, {recursive: true});
+          for (const name of ['source-pins.json', 'fixtures.mjs']) copyFileSync(`${base}/${name}`, `${process.env.PH277_OUTPUT_DIR}/${name}`);
+          console.log('PH277_SOURCE_PINS', JSON.stringify(pins));
+          JS
+
+      - name: Run one real-Mongo comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          PH277_RUNTIME="$RUNNER_TEMP/ph277-mongo-runtime"
+          mkdir -p "$PH277_RUNTIME"
+          printf '{"private":true}\n' > "$PH277_RUNTIME/package.json"
+          npm install --prefix "$PH277_RUNTIME" \
+            --no-save --no-package-lock --ignore-scripts \
+            --no-audit --no-fund --include=optional \
+            vitest@4.1.10 mongoose@9.9.2 vite@8.3.2
+          ln -s "$PH277_RUNTIME/node_modules" "$GITHUB_WORKSPACE/node_modules"
+          node -e 'console.log({node:process.versions.node,vitest:require("vitest/package.json").version,mongoose:require("mongoose/package.json").version,vite:require("vite/package.json").version})'
+          node "$PH277_RUNTIME/node_modules/vitest/vitest.mjs" run \
+            --config vitest.ph277-mongo.config.mjs --reporter=verbose \
+            2>&1 | tee "$PH277_OUTPUT_DIR/execution.log"
+
+      - name: Summarize source-pinned measurements
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import {existsSync, readFileSync, appendFileSync} from 'node:fs';
+          const path = `${process.env.PH277_OUTPUT_DIR}/receipt.json`;
+          if (existsSync(path)) {
+            const r = JSON.parse(readFileSync(path, 'utf8'));
+            const lines = ['# PH277 disposable Mongo comparison', '', `Status: ${r.status}`, '',
+              `Baseline: ${r.source_pins.baseline_commit}`, `Candidate: ${r.source_pins.candidate_commit}`, '',
+              '| Case | Historical finds before | After | Median before ms | After ms |',
+              '| --- | ---: | ---: | ---: | ---: |'];
+            for (const c of r.cases) lines.push(`| ${c.case} | ${c.measurements[0].before_commands.historicalPurchaseFind} | ${c.measurements[0].after_commands.historicalPurchaseFind} | ${c.before_median_ms.toFixed(3)} | ${c.after_median_ms.toFixed(3)} |`);
+            lines.push('', 'Synthetic same-host measurements; full paired values and source pins are in the job log.', 'Only statement UUID and no-argument Date construction are fixed. Real database, models, HMAC and monotonic clocks are retained.');
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          }
+          JS
