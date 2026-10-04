@@ -58,6 +58,43 @@ The added client-record case uses the actual `PromptRecord` ID type and a bigint
 above the safe integer range. Run both commands to check the typed assignment
 and the XML output; the focused runtime command is not a full deployment check.
 
+### Recorded bigint execution (2026-10-04)
+
+One direct execution of `buildSitemapXml` passed on Node.js 24.19.0 (Linux x64)
+using the existing bigint case's inputs: active `9007199254740993n` and inactive
+`9007199254740995n`. The XML contained the exact active decimal ID, omitted the
+rounded value `9007199254740992`, and omitted the inactive ID. The executed
+module was copied byte-for-byte from commit
+`1a8cee0471088e43d0c1b7e8c3f76f21720dec17`; its Git blob was
+`76f982806de6bbde18a0d14914551992612ada9b`.
+
+The same runtime check can be reproduced from the repository root:
+
+```bash
+node --experimental-strip-types --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { buildSitemapXml } from './src/lib/seo/sitemapOrigin.ts';
+const xml = buildSitemapXml({
+  origin: 'https://prompthash.io',
+  lastmod: '2026-09-24',
+  prompts: [
+    { id: 9007199254740993n, active: true },
+    { id: 9007199254740995n, active: false },
+  ],
+});
+assert.ok(xml.includes('<loc>https://prompthash.io/prompts/9007199254740993</loc>'));
+assert.ok(!xml.includes('9007199254740992'));
+assert.ok(!xml.includes('9007199254740995'));
+console.log('PASS: existing bigint sitemap case');
+NODE
+```
+
+This executes the production XML builder with native type stripping. It does
+not run Vitest, typecheck the `PromptRecord` assignment, execute the HTTP handler,
+or establish lint, build or deployed-catalog results. The maintained
+`npm run test:sitemap-origin` command remains unrun for this continuation;
+its pinned Vitest/Vite runtime was unavailable in the checked workspace.
+
 ## Non-goals
 
 Sitemap ranking fields (`changefreq`, `priority`) are unchanged.
