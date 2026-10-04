@@ -130,19 +130,29 @@ export function hashClientIp(ip: string): string {
   return createHash("sha256").update(ip.trim().toLowerCase()).digest("hex");
 }
 
+function deliveryKeyParts(payload: RedactedAuditPayload): string[] {
+  return [
+    payload.action,
+    payload.result,
+    payload.promptId ?? "",
+    payload.walletHash ?? "",
+    payload.requestId ?? "",
+    payload.reason ?? "",
+  ];
+}
+
+function legacyDeliveryKey(payload: RedactedAuditPayload): string {
+  return createHash("sha256").update(deliveryKeyParts(payload).join("|")).digest("hex");
+}
+
 export function buildDeliveryKey(payload: RedactedAuditPayload): string {
-  return createHash("sha256")
-    .update(
-      [
-        payload.action,
-        payload.result,
-        payload.promptId ?? "",
-        payload.walletHash ?? "",
-        payload.requestId ?? "",
-        payload.reason ?? "",
-      ].join("|"),
-    )
-    .digest("hex");
+  const parts = deliveryKeyParts(payload);
+  // Keep existing unambiguous keys. Frame delimiter-bearing values so field
+  // boundaries cannot move between requestId/reason or other adjacent fields.
+  const encoded = parts.some((part) => part.includes("|"))
+    ? `v2:${JSON.stringify(parts)}`
+    : parts.join("|");
+  return createHash("sha256").update(encoded).digest("hex");
 }
 
 export function redactAcceptInput(input: AcceptInput): RedactedAuditPayload {
@@ -301,7 +311,15 @@ export class DurableAuditQueue {
     const deliveryKey = buildDeliveryKey(payload);
 
     try {
-      const existing = await this.store.findByDeliveryKey(deliveryKey);
+      let existing = await this.store.findByDeliveryKey(deliveryKey);
+      if (!existing && deliveryKeyParts(payload).some((part) => part.includes("|"))) {
+        const legacy = await this.store.findByDeliveryKey(legacyDeliveryKey(payload));
+        // A legacy hash alone is ambiguous. Reuse it only when its stored
+        // event has the same framed identity; otherwise retain a new event.
+        if (legacy && buildDeliveryKey(legacy.payload) === deliveryKey) {
+          existing = legacy;
+        }
+      }
       if (existing) {
         return { acceptanceId: existing.acceptanceId, duplicate: true };
       }
