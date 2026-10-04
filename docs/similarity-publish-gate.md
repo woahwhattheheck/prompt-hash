@@ -26,7 +26,7 @@ The current `/sell` form checks the draft against indexed prompts and maps the s
 
 ## Current publication and privacy boundary
 
-The form sends the title and **full prompt text** as JSON to `/api/fingerprint/publish-check` before calling `encryptPromptPlaintext`. The backend receives readable draft text for comparison. HTTPS can protect transport, but the similarity request is not encrypted with the prompt's content key and the full prompt does not remain solely in the browser. Use this flow only with a backend trusted to receive that draft.
+The form sends the title and **full prompt text** as JSON to `/api/fingerprint/publication-review` before calling `encryptPromptPlaintext`. The backend receives readable draft text long enough to compare it, but persisted moderation state contains only the SHA-256 commitment and similarity evidence described below. HTTPS can protect transport; the comparison request itself is not encrypted with the prompt's content key. Use this flow only with a backend trusted to receive that draft during admission.
 
 The read-only publish-check endpoint still exists for callers that only need a score. The creator submit path now uses `POST /api/fingerprint/publication-review` instead: the server performs the same comparison exactly once and returns clean drafts without persisting them. A `review` or `block` result stores a separate moderation record containing only the exact creator address, SHA-256 commitment of `[title, content]`, score, matched prompt id, decision/version, and later audit entries. Draft plaintext is not stored in that record, and the indexed `Prompt` collection remains read-through/indexer authority rather than a pre-chain write surface.
 
