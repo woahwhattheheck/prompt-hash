@@ -397,7 +397,7 @@ export class DurableAuditQueue {
         row.acceptanceId,
         row.leaseToken,
         nextAttempt,
-        now + backoff,
+        (this.options.now ?? Date.now)() + backoff,
         detail,
       );
       if (!retried) return "lease_lost";
