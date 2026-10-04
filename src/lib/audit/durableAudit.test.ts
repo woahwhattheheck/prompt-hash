@@ -181,7 +181,9 @@ describe("accept-before-complete", () => {
     available = true;
     const accepted = await q.accept(input);
     expect(accepted.duplicate).toBe(false);
-    expect((await store.getById(accepted.acceptanceId))?.status).toBe("accepted");
+    expect((await store.getById(accepted.acceptanceId))?.status).toBe(
+      "accepted",
+    );
     expect(await q.accept(input)).toEqual({ ...accepted, duplicate: true });
     expect(q.getMetrics()).toMatchObject({ accepted: 1, acceptFailures: 1 });
   });
@@ -255,6 +257,102 @@ describe("drain / crash recovery / DLQ", () => {
     expect(queue.getMetrics().dlq).toBe(1);
   });
 
+  it("reclaims an abandoned claim only after its lease expires", async () => {
+    const { acceptanceId } = await queue.accept({
+      action: "unlock_success",
+      result: "success",
+      requestId: "crash-after-claim",
+    });
+    const abandoned = (await store.claimNext(clock, 100))!;
+    const recovered = new DurableAuditQueue(store, {
+      now: () => clock,
+      leaseDurationMs: 100,
+    });
+    const delivered: string[] = [];
+    const persist = async (_payload: RedactedAuditPayload, id: string) => {
+      expect((await store.getById(id))?.leaseToken).not.toBe(
+        abandoned.leaseToken,
+      );
+      delivered.push(id);
+    };
+
+    clock = abandoned.leaseExpiresAt - 1;
+    expect(await recovered.drainOnce(persist)).toBe("idle");
+    expect(delivered).toEqual([]);
+    clock += 1;
+    expect(await recovered.drainOnce(persist)).toBe("drained");
+    expect(delivered).toEqual([acceptanceId]);
+    expect(await store.getById(acceptanceId)).toMatchObject({
+      status: "drained",
+      leaseToken: null,
+      leaseExpiresAt: null,
+    });
+  });
+
+  it("recovers a legacy draining row without lease metadata", async () => {
+    const { acceptanceId } = await queue.accept({
+      action: "unlock_success",
+      result: "success",
+      requestId: "legacy-claim",
+    });
+    const row = (await store.getById(acceptanceId))!;
+    const legacyStore = createInMemoryOutboxStore();
+    await legacyStore.insert({ ...row, status: "draining" });
+    const recovered = new DurableAuditQueue(legacyStore, { now: () => clock });
+
+    expect(await recovered.drainOnce(async () => {})).toBe("drained");
+    expect((await legacyStore.getById(acceptanceId))?.status).toBe("drained");
+  });
+
+  it.each(["success", "retry", "dlq"] as const)(
+    "fences a stale worker's %s transition after another worker reclaims",
+    async (outcome) => {
+      queue = new DurableAuditQueue(store, {
+        now: () => clock,
+        leaseDurationMs: 100,
+        maxRetries: outcome === "dlq" ? 0 : 2,
+      });
+      const { acceptanceId } = await queue.accept({
+        action: "unlock_success",
+        result: "success",
+        requestId: `stale-${outcome}`,
+      });
+      let finish!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const staleWorker = queue.drainOnce(async () => {
+        entered();
+        await pending;
+        if (outcome !== "success") throw new Error("late persistence failure");
+      });
+      await started;
+      clock += 100;
+      const replacement = (await store.claimNext(clock, 100))!;
+      finish();
+
+      expect(await staleWorker).toBe("lease_lost");
+      expect(await store.getById(acceptanceId)).toMatchObject({
+        status: "draining",
+        leaseToken: replacement.leaseToken,
+        attemptCount: 0,
+        lastError: null,
+      });
+      expect(queue.getMetrics()).toMatchObject({
+        drained: 0,
+        retried: 0,
+        dlq: 0,
+      });
+      expect(
+        await store.markDrained(acceptanceId, replacement.leaseToken),
+      ).toBe(true);
+    },
+  );
+
   it("drains successfully after transient outage recovers", async () => {
     await queue.accept({
       action: "unlock_invalid_signature",
@@ -291,11 +389,19 @@ describe("degraded policy adapter", () => {
       const queue = new DurableAuditQueue(store);
       const result = await acceptCriticalOrThrow(
         queue,
-        { action: "unlock_success", result: "success", requestId: "read-outage" },
+        {
+          action: "unlock_success",
+          result: "success",
+          requestId: "read-outage",
+        },
         true,
       );
 
-      expect(result).toEqual({ acceptanceId: null, duplicate: false, degraded: true });
+      expect(result).toEqual({
+        acceptanceId: null,
+        duplicate: false,
+        degraded: true,
+      });
       expect(queue.getMetrics()).toMatchObject({
         accepted: 0,
         acceptFailures: 1,

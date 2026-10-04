@@ -38,6 +38,11 @@ function maxRetries(): number {
   return Number.isFinite(n) && n >= 0 ? n : 5;
 }
 
+function leaseDurationMs(): number {
+  const n = Number(process.env.AUDIT_OUTBOX_LEASE_MS || "30000");
+  return Number.isFinite(n) && n > 0 ? n : 30_000;
+}
+
 export function createMongoOutboxStore(): OutboxStore {
   return {
     async countOpen() {
@@ -78,41 +83,84 @@ export function createMongoOutboxStore(): OutboxStore {
         throw err;
       }
     },
-    async claimNext(now) {
+    async claimNext(now, leaseDurationMs) {
+      const leaseToken = randomUUID();
+      const leaseExpiresAt = now + leaseDurationMs;
       const doc = await AuditOutbox.findOneAndUpdate(
         {
-          status: "accepted",
-          nextAttemptAt: { $lte: new Date(now) },
+          $or: [
+            { status: "accepted", nextAttemptAt: { $lte: new Date(now) } },
+            { status: "draining", leaseExpiresAt: { $lte: new Date(now) } },
+            // Mongo's null equality also matches pre-lease rows with no field.
+            { status: "draining", leaseExpiresAt: null },
+          ],
         },
-        { $set: { status: "draining" } },
+        {
+          $set: {
+            status: "draining",
+            leaseToken,
+            leaseExpiresAt: new Date(leaseExpiresAt),
+          },
+        },
         { sort: { acceptedAt: 1 }, new: true },
       ).lean();
-      return doc ? toRecord(doc as Record<string, unknown>) : null;
+      return doc
+        ? {
+            ...toRecord(doc as Record<string, unknown>),
+            leaseToken,
+            leaseExpiresAt,
+          }
+        : null;
     },
-    async markDrained(acceptanceId) {
-      await AuditOutbox.updateOne(
-        { acceptanceId },
-        { $set: { status: "drained", lastError: null } },
+    async markDrained(acceptanceId, leaseToken) {
+      const result = await AuditOutbox.updateOne(
+        { acceptanceId, status: "draining", leaseToken },
+        {
+          $set: {
+            status: "drained",
+            lastError: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+          },
+        },
       );
+      return result.matchedCount === 1;
     },
-    async markRetry(acceptanceId, attemptCount, nextAttemptAt, error) {
-      await AuditOutbox.updateOne(
-        { acceptanceId },
+    async markRetry(
+      acceptanceId,
+      leaseToken,
+      attemptCount,
+      nextAttemptAt,
+      error,
+    ) {
+      const result = await AuditOutbox.updateOne(
+        { acceptanceId, status: "draining", leaseToken },
         {
           $set: {
             status: "accepted",
             attemptCount,
             nextAttemptAt: new Date(nextAttemptAt),
             lastError: error,
+            leaseToken: null,
+            leaseExpiresAt: null,
           },
         },
       );
+      return result.matchedCount === 1;
     },
-    async markDlq(acceptanceId, error) {
-      await AuditOutbox.updateOne(
-        { acceptanceId },
-        { $set: { status: "dlq", lastError: error } },
+    async markDlq(acceptanceId, leaseToken, error) {
+      const result = await AuditOutbox.updateOne(
+        { acceptanceId, status: "draining", leaseToken },
+        {
+          $set: {
+            status: "dlq",
+            lastError: error,
+            leaseToken: null,
+            leaseExpiresAt: null,
+          },
+        },
       );
+      return result.matchedCount === 1;
     },
     async getById(acceptanceId) {
       const doc = await AuditOutbox.findOne({ acceptanceId }).lean();
@@ -148,6 +196,10 @@ function toRecord(doc: Record<string, unknown>): OutboxRecord {
     createdAt: acceptedAt,
     nextAttemptAt,
     lastError: (doc.lastError as string | null) ?? null,
+    leaseToken: (doc.leaseToken as string | null) ?? null,
+    leaseExpiresAt: doc.leaseExpiresAt
+      ? new Date(doc.leaseExpiresAt as string | Date).getTime()
+      : null,
   };
 }
 
@@ -159,6 +211,7 @@ export function getDurableAuditQueue(): DurableAuditQueue {
       maxBacklog: maxBacklog(),
       maxRetries: maxRetries(),
       baseBackoffMs: 250,
+      leaseDurationMs: leaseDurationMs(),
       idFactory: () => randomUUID(),
     });
   }
@@ -173,6 +226,7 @@ export function resetDurableAuditQueueForTests(
     maxBacklog: maxBacklog(),
     maxRetries: maxRetries(),
     baseBackoffMs: 10,
+    leaseDurationMs: leaseDurationMs(),
     idFactory: () => randomUUID(),
     ...options,
   });
@@ -183,15 +237,32 @@ async function persistToAuditLog(
   payload: RedactedAuditPayload,
   acceptanceId: string,
 ): Promise<void> {
-  await AuditLog.create({
-    action: payload.action,
-    result: payload.result,
-    promptId: payload.promptId,
-    walletAddress: payload.walletHash,
-    requestId: payload.requestId ?? acceptanceId,
-    clientIp: payload.clientIpHash,
-    reason: payload.reason,
-  });
+  // Wait for the declared unique index when Mongoose manages indexes. Deployments
+  // with autoIndex disabled must provision that index before draining the outbox.
+  await AuditLog.init();
+  try {
+    await AuditLog.create({
+      acceptanceId,
+      action: payload.action,
+      result: payload.result,
+      promptId: payload.promptId,
+      walletAddress: payload.walletHash,
+      requestId: payload.requestId ?? acceptanceId,
+      clientIp: payload.clientIpHash,
+      reason: payload.reason,
+    });
+  } catch (err: unknown) {
+    if (
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: number }).code === 11000 &&
+      (await AuditLog.exists({ acceptanceId }))
+    ) {
+      return;
+    }
+    throw err;
+  }
 }
 
 /**

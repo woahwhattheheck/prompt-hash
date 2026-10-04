@@ -30,7 +30,8 @@ Optional degraded mode — set `AUDIT_DEGRADED_MODE=1`. Unlock may complete with
 
 The current unlock handler starts `drainCriticalAuditOutbox(5)` without awaiting it after acceptance. This is a best-effort request-triggered drain. The adapter exports a drain function with a default limit of 50, but `server/src/server.ts` and the package scripts do not start a periodic outbox worker. Restarting that server alone does not invoke the drain. A completed response does not guarantee completion of its detached work, especially when a serverless invocation ends.
 
-- A drain claims one due `accepted` row at a time, marks it `draining`, writes to `AuditLog`, then marks it `drained`.
+- A drain atomically claims one due `accepted` row or an abandoned `draining` row. It sets a fresh lease token and deadline, writes to `AuditLog`, then marks the row `drained`. A live, unexpired claim is excluded from other drainers.
+- An expired claim can be reclaimed by a later drain call. A completion, retry or dead-letter update must match the current claim token; a superseded worker cannot alter the replacement claim or increment its own completion counters. The default lease is 30 seconds, configurable with `AUDIT_OUTBOX_LEASE_MS`.
 - A failed write is scheduled for a later drain call. The Mongo adapter uses an initial backoff of 250 ms, doubled after each failure. There is no retry timer inside the queue; a later invocation must occur after `nextAttemptAt`.
 - `AUDIT_OUTBOX_MAX_RETRIES` counts retries **after the initial attempt**. The default 5 permits up to 6 drain attempts ending in failure before `dlq`; 0 sends the first failed attempt to `dlq`.
 - The backlog check counts `accepted` and `draining` rows, excluding `drained` and `dlq`. At the configured threshold, a new acceptance fails closed unless degraded mode is enabled. This count-then-insert check is not an atomic capacity reservation across concurrent acceptances.
@@ -42,25 +43,40 @@ Delivery key = hash(action|result|promptId|walletHash|requestId|reason). Duplica
 
 Recovery depends on the stored state:
 
-| Interruption point | Retained state and current behavior |
-| --- | --- |
-| After acceptance, before a drain claims the row | The row remains `accepted` and can be claimed by a later drain invocation when due. Persistence survives a process restart, but drain execution must still resume. |
-| After the claim, before completion or retry is recorded | The row can remain `draining`. `claimNext` selects only `accepted` rows; the current adapter has no lease expiry or automatic reclaim path for an abandoned claim. |
-| After an `AuditLog` write, before `markDrained` completes | The destination write and outbox update are separate. A retry can write another log row because `persistToAuditLog` uses `AuditLog.create` without an acceptance-ID uniqueness guard. |
+| Interruption point                                        | Retained state and current behavior                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| After acceptance, before a drain claims the row           | The row remains `accepted` and can be claimed by a later drain invocation when due. Persistence survives a process restart, but drain execution must still resume.                                                                                                                                                                                                  |
+| After the claim, before completion or retry is recorded   | The row remains `draining` until a later drain reclaims its expired lease with a new token. A delayed older worker cannot acknowledge, retry or dead-letter the replacement claim.                                                                                                                                                                                  |
+| After an `AuditLog` write, before `markDrained` completes | The row retains its lease; an acknowledgement failure does not consume persistence retries or send a successfully written event to DLQ. After reclamation, the destination insert uses the same acceptance ID. Its unique index rejects a second row; delivery succeeds only after the existing acceptance ID is confirmed, then the current claim is acknowledged. |
 
-Acceptance deduplication therefore does not establish exactly-once destination delivery or complete crash recovery. Keep the acceptance ID and inspect the outbox and corresponding log state before any manual recovery. Automatic reclamation, destination deduplication and a scheduled worker require an explicit implementation and operational verification; this guide supplies no delete/reset/requeue command.
+`AuditLog` declares a unique partial index on string `acceptanceId` values. Existing audit records without that field remain valid. Delivery continues through `AuditLog.create` and its save middleware, preserving the existing immutable-record and hash-chain behavior. An unrelated duplicate-key error is not acknowledged. This is deduplication of the destination row; a persistence callback can still be invoked again after an interrupted acknowledgement.
+
+Before deploying recovery, ensure the acceptance-ID unique index exists. The adapter awaits model initialization when Mongoose manages indexes; deployments with `autoIndex` disabled must provision the declared index themselves. Stop or finish older workers before relying on token fencing, because their acknowledgement code does not include the token. A legacy `draining` row with missing or null lease metadata is eligible for reclamation. If an older worker had already written a destination record without an acceptance ID, the new index cannot identify that historical delivery; inspect those legacy states before rollout to avoid a duplicate historical log.
+
+Lease expiry does not schedule work. A later drain invocation is still required, and the application does not supply a periodic worker. This repair does not serialize concurrent hash-chain appends or change the count-then-insert capacity check.
 
 ## Env
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `AUDIT_DEGRADED_MODE` | off | Exact `1`, `true` or `yes` enables completion without an acceptance ID when acceptance fails |
-| `AUDIT_OUTBOX_MAX_BACKLOG` | 1000 | Open-row threshold; configure a positive integer |
-| `AUDIT_OUTBOX_MAX_RETRIES` | 5 | Retries after the initial persistence attempt; configure a nonnegative integer |
+| Variable                   | Default | Meaning                                                                                      |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `AUDIT_DEGRADED_MODE`      | off     | Exact `1`, `true` or `yes` enables completion without an acceptance ID when acceptance fails |
+| `AUDIT_OUTBOX_MAX_BACKLOG` | 1000    | Open-row threshold; configure a positive integer                                             |
+| `AUDIT_OUTBOX_MAX_RETRIES` | 5       | Retries after the initial persistence attempt; configure a nonnegative integer               |
+| `AUDIT_OUTBOX_LEASE_MS`    | 30000   | Claim duration in milliseconds; a finite positive number, otherwise the default is used      |
 
-Set these in the server environment. Backlog and retry settings are read when the shared queue is first created, so restart the process to apply changes. Each accepted row retains its own retry limit; changing the setting does not rewrite older rows. The degraded flag is read on each critical acceptance call. The current numeric readers use base-10 `parseInt` with the defaults above as fallbacks, rather than a strict configuration-schema check.
+Set these in the server environment. Backlog, retry and lease settings are read when the shared queue is first created, so restart the process to apply changes. Each accepted row retains its own retry limit; changing the setting does not rewrite older rows. The degraded flag is read on each critical acceptance call. Backlog and retry readers use base-10 `parseInt` with the defaults above as fallbacks; the lease reader requires a finite positive number.
 
-For a local maintainer check, `npm run test:durable-audit` runs only `src/lib/audit/durableAudit.test.ts`; its dedicated configuration does not include the unlock handler test file. Live Mongo durability, destination-write interruptions, abandoned claims and worker restart behavior also need integration verification before relying on a deployment's recovery guarantees.
+For a local maintainer check, `npm run test:durable-audit` runs the queue and destination-adapter cases. These cover abandoned leases, stale success/retry/DLQ transitions, and a successful destination insertion followed by an acknowledgement outage with zero persistence retries. Adapter fault injection controls the database boundary; it does not establish live Mongo durability or index installation.
+
+Set `AUDIT_TEST_MONGODB_URI` to a disposable Mongo endpoint to also run the three Mongo integration cases with the same command. Each run creates and removes its own uniquely named test database. They exercise competing atomic claims, stale transitions, unique destination insertion after an acknowledgement interruption, and compatibility with legacy records. Without this variable those cases are explicitly skipped. The dedicated configuration still excludes the unlock handler tests. Deployment restart/worker scheduling and actual Mongo integration must be verified in the target environment before relying on its recovery guarantees.
+
+### Recovery continuation validation (2026-10-04)
+
+The focused command passed 25 queue and destination-adapter cases with Vitest 4.1.10 and Node 24.19.0; the three opt-in Mongo cases were skipped. Strict TypeScript 6.0.3 checking covered the changed queue, adapter, models and tests. Formatting checks passed with Prettier 3.8.3.
+
+A controlled native comparison against parent source `3d777ee8b45eeb4cb781a40cdf71acceabe58c4f` reproduced two failures: an abandoned claim remained `draining` and a later drain returned `idle`; a successful persistence callback followed by acknowledgement failure entered DLQ when `maxRetries=0`. With this change, the expired claim drained, and acknowledgement failure retained a recoverable claim without consuming retries or DLQ. These executions used the real queue with controlled store and destination boundaries, not a killed Mongo process.
+
+An isolated MongoDB 7.0.14 startup attempt exited with code 100 and `open: Operation not permitted` in the cloud environment. Live Mongo atomicity, index enforcement and process-restart integration were therefore not executed. The optional integration cases and rollout conditions above remain necessary checks for a deployment; the native fault-injection results do not substitute for them.
 
 ## Non-goals
 

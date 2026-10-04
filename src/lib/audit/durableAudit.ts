@@ -46,21 +46,33 @@ export interface OutboxRecord {
   createdAt: number;
   nextAttemptAt: number;
   lastError: string | null;
+  leaseToken: string | null;
+  leaseExpiresAt: number | null;
+}
+
+export interface OutboxClaim extends OutboxRecord {
+  leaseToken: string;
+  leaseExpiresAt: number;
 }
 
 export interface OutboxStore {
   countOpen(): Promise<number>;
   findByDeliveryKey(deliveryKey: string): Promise<OutboxRecord | null>;
   insert(record: OutboxRecord): Promise<OutboxRecord>;
-  claimNext(now: number): Promise<OutboxRecord | null>;
-  markDrained(acceptanceId: string): Promise<void>;
+  claimNext(now: number, leaseDurationMs: number): Promise<OutboxClaim | null>;
+  markDrained(acceptanceId: string, leaseToken: string): Promise<boolean>;
   markRetry(
     acceptanceId: string,
+    leaseToken: string,
     attemptCount: number,
     nextAttemptAt: number,
     error: string,
-  ): Promise<void>;
-  markDlq(acceptanceId: string, error: string): Promise<void>;
+  ): Promise<boolean>;
+  markDlq(
+    acceptanceId: string,
+    leaseToken: string,
+    error: string,
+  ): Promise<boolean>;
   getById(acceptanceId: string): Promise<OutboxRecord | null>;
 }
 
@@ -78,6 +90,7 @@ export interface DurableAuditQueueOptions {
   maxBacklog: number;
   maxRetries: number;
   baseBackoffMs: number;
+  leaseDurationMs: number;
   now?: () => number;
   idFactory?: () => string;
 }
@@ -173,37 +186,63 @@ export function createInMemoryOutboxStore(): OutboxStore {
       byKey.set(copy.deliveryKey, copy.acceptanceId);
       return copy;
     },
-    async claimNext(now) {
+    async claimNext(now, leaseDurationMs) {
       const candidates = [...byId.values()]
-        .filter((r) => r.status === "accepted" && r.nextAttemptAt <= now)
+        .filter(
+          (r) =>
+            (r.status === "accepted" && r.nextAttemptAt <= now) ||
+            (r.status === "draining" &&
+              (r.leaseExpiresAt == null || r.leaseExpiresAt <= now)),
+        )
         .sort((a, b) => a.createdAt - b.createdAt);
       const next = candidates[0];
       if (!next) return null;
       next.status = "draining";
-      return { ...next, payload: { ...next.payload } };
+      const leaseToken = randomUUID();
+      const leaseExpiresAt = now + leaseDurationMs;
+      next.leaseToken = leaseToken;
+      next.leaseExpiresAt = leaseExpiresAt;
+      return {
+        ...next,
+        payload: { ...next.payload },
+        leaseToken,
+        leaseExpiresAt,
+      };
     },
-    async markDrained(acceptanceId) {
+    async markDrained(acceptanceId, leaseToken) {
       const r = byId.get(acceptanceId);
-      if (r) {
-        r.status = "drained";
-        r.lastError = null;
-      }
+      if (r?.status !== "draining" || r.leaseToken !== leaseToken) return false;
+      r.status = "drained";
+      r.lastError = null;
+      r.leaseToken = null;
+      r.leaseExpiresAt = null;
+      return true;
     },
-    async markRetry(acceptanceId, attemptCount, nextAttemptAt, error) {
+    async markRetry(
+      acceptanceId,
+      leaseToken,
+      attemptCount,
+      nextAttemptAt,
+      error,
+    ) {
       const r = byId.get(acceptanceId);
-      if (r) {
-        r.status = "accepted";
-        r.attemptCount = attemptCount;
-        r.nextAttemptAt = nextAttemptAt;
-        r.lastError = error;
-      }
+      if (r?.status !== "draining" || r.leaseToken !== leaseToken) return false;
+      r.status = "accepted";
+      r.attemptCount = attemptCount;
+      r.nextAttemptAt = nextAttemptAt;
+      r.lastError = error;
+      r.leaseToken = null;
+      r.leaseExpiresAt = null;
+      return true;
     },
-    async markDlq(acceptanceId, error) {
+    async markDlq(acceptanceId, leaseToken, error) {
       const r = byId.get(acceptanceId);
-      if (r) {
-        r.status = "dlq";
-        r.lastError = error;
-      }
+      if (r?.status !== "draining" || r.leaseToken !== leaseToken) return false;
+      r.status = "dlq";
+      r.lastError = error;
+      r.leaseToken = null;
+      r.leaseExpiresAt = null;
+      return true;
     },
     async getById(acceptanceId) {
       const r = byId.get(acceptanceId);
@@ -216,6 +255,7 @@ const DEFAULTS: DurableAuditQueueOptions = {
   maxBacklog: 1_000,
   maxRetries: 5,
   baseBackoffMs: 100,
+  leaseDurationMs: 30_000,
 };
 
 export class DurableAuditQueue {
@@ -237,6 +277,12 @@ export class DurableAuditQueue {
   ) {
     this.store = store;
     this.options = { ...DEFAULTS, ...options };
+    if (
+      !Number.isFinite(this.options.leaseDurationMs) ||
+      this.options.leaseDurationMs <= 0
+    ) {
+      throw new RangeError("Audit lease duration must be finite and positive.");
+    }
   }
 
   getMetrics(): DurableAuditMetrics {
@@ -283,6 +329,8 @@ export class DurableAuditQueue {
         createdAt: now,
         nextAttemptAt: now,
         lastError: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
       });
 
       if (inserted.acceptanceId !== acceptanceId) {
@@ -307,35 +355,45 @@ export class DurableAuditQueue {
       payload: RedactedAuditPayload,
       acceptanceId: string,
     ) => Promise<void>,
-  ): Promise<"drained" | "retried" | "dlq" | "idle"> {
+  ): Promise<"drained" | "retried" | "dlq" | "idle" | "lease_lost"> {
     const now = (this.options.now ?? Date.now)();
-    const row = await this.store.claimNext(now);
+    const row = await this.store.claimNext(now, this.options.leaseDurationMs);
     if (!row) return "idle";
 
     try {
       await persist(row.payload, row.acceptanceId);
-      await this.store.markDrained(row.acceptanceId);
-      this.metrics.drained += 1;
-      return "drained";
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const nextAttempt = row.attemptCount + 1;
       if (nextAttempt > row.maxRetries) {
-        await this.store.markDlq(row.acceptanceId, detail);
+        if (
+          !(await this.store.markDlq(row.acceptanceId, row.leaseToken, detail))
+        ) {
+          return "lease_lost";
+        }
         this.metrics.dlq += 1;
         return "dlq";
       }
-      const backoff =
-        this.options.baseBackoffMs * Math.pow(2, nextAttempt - 1);
-      await this.store.markRetry(
+      const backoff = this.options.baseBackoffMs * Math.pow(2, nextAttempt - 1);
+      const retried = await this.store.markRetry(
         row.acceptanceId,
+        row.leaseToken,
         nextAttempt,
         now + backoff,
         detail,
       );
+      if (!retried) return "lease_lost";
       this.metrics.retried += 1;
       return "retried";
     }
+
+    // A failed acknowledgement must retain the lease for recovery. The log
+    // write already succeeded, so it must not consume the persistence retry budget.
+    if (!(await this.store.markDrained(row.acceptanceId, row.leaseToken))) {
+      return "lease_lost";
+    }
+    this.metrics.drained += 1;
+    return "drained";
   }
 
   async drainAll(

@@ -36,11 +36,14 @@ const auditOutboxSchema = new Schema(
     acceptedAt: { type: Date, default: Date.now },
     nextAttemptAt: { type: Date, default: Date.now, index: true },
     lastError: { type: String, default: null },
+    leaseToken: { type: String, default: null },
+    leaseExpiresAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
 
 auditOutboxSchema.index({ status: 1, nextAttemptAt: 1 });
+auditOutboxSchema.index({ status: 1, leaseExpiresAt: 1 });
 
 export const AuditOutbox =
   mongoose.models.AuditOutbox ||

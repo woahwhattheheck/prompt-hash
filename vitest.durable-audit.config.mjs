@@ -8,7 +8,11 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["src/lib/audit/durableAudit.test.ts"],
+    include: [
+      "src/lib/audit/durableAudit.test.ts",
+      "tests/durableAuditQueue.test.ts",
+      "tests/durableAuditQueue.mongo.test.ts",
+    ],
   },
   resolve: {
     alias: {
