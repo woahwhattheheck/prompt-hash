@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render as renderWithProviders, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as renderWithProviders, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { PayoutStatementsCard } from "./PayoutStatementsCard";
@@ -108,6 +108,47 @@ describe("PayoutStatementsCard", () => {
     });
     expect(screen.getByText(/period preview/i)).toBeInTheDocument();
     expect(screen.getAllByText(/fees \(500 bps\)/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each(["From", "To"])("invalidates the period preview when %s changes", async (label) => {
+    const user = userEvent.setup();
+    renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+    await screen.findByText("stmt_saved");
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-01-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2026-01-31" } });
+    await user.click(screen.getByRole("button", { name: /preview period/i }));
+    await screen.findByText("stmt_preview");
+
+    fireEvent.change(screen.getByLabelText(label), { target: { value: "2026-01-15" } });
+
+    expect(screen.queryByText("stmt_preview")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save statement/i })).not.toBeInTheDocument();
+    expect(screen.getByText("stmt_saved")).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
+  it("locks period edits during refresh and does not revive a preview after failure", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+    await screen.findByText("stmt_saved");
+    await user.click(screen.getByRole("button", { name: /preview period/i }));
+    await screen.findByText("stmt_preview");
+
+    let resolve!: (response: Response) => void;
+    vi.mocked(fetch).mockReturnValueOnce(new Promise<Response>((done) => { resolve = done; }));
+    await user.click(screen.getByRole("button", { name: /preview period/i }));
+    expect(screen.getByLabelText("From")).toBeDisabled();
+    expect(screen.getByLabelText("To")).toBeDisabled();
+    expect(screen.queryByText("stmt_preview")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolve(Response.json({ error: "Preview unavailable" }, { status: 503 }));
+    });
+    expect(await screen.findByText("Preview unavailable")).toBeInTheDocument();
+    expect(screen.getByLabelText("From")).toBeEnabled();
+    expect(screen.getByLabelText("To")).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /save statement/i })).not.toBeInTheDocument();
+    expect(screen.getByText("stmt_saved")).toBeInTheDocument();
   });
 
   it.each([

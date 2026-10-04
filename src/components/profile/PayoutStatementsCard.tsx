@@ -141,6 +141,7 @@ function WalletPayoutStatementsCard({
     if (!walletAddress) return;
     setLoading(true);
     setError(null);
+    setPreview(null);
     try {
       const fromIso = new Date(from + "T00:00:00.000Z").toISOString();
       const toIso = new Date(to + "T23:59:59.999Z").toISOString();
@@ -373,7 +374,11 @@ function WalletPayoutStatementsCard({
               id="stmt-from"
               type="date"
               value={from}
-              onChange={(e) => setFrom(e.target.value)}
+              disabled={loading}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                setPreview(null);
+              }}
               className="border-white/10 bg-white/[0.04] text-slate-100"
             />
           </div>
@@ -385,7 +390,11 @@ function WalletPayoutStatementsCard({
               id="stmt-to"
               type="date"
               value={to}
-              onChange={(e) => setTo(e.target.value)}
+              disabled={loading}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setPreview(null);
+              }}
               className="border-white/10 bg-white/[0.04] text-slate-100"
             />
           </div>
