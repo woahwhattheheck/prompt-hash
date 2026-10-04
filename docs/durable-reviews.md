@@ -54,15 +54,17 @@ has stopped. Then remove only the leftover `.lock` sidecar and restart the
 workers. Preserve the review snapshot. Never remove or replace a live owner's
 lock. Stop writers before manually restoring an incompatible snapshot as well.
 
-Production continues to use Mongo when `MONGODB_URI` is configured. This
-coordination was measured between local Node processes on one local filesystem;
-live Mongo persistence, network filesystems, mixed old/new workers and different
-path aliases were not validated.
+Production continues to use Mongo when `MONGODB_URI` is configured. The original
+file-coordination measurements used local Node processes on one local filesystem.
+Network filesystems, mixed old/new workers and different path aliases were not
+validated.
 
-## Coordination verification
+## Prior file-coordination verification
 
-The maintained `npm run test:durable-reviews` suite passes **31/31** across its
-three configured files. It preserves the previous 22 checks, including public
+At `f871a5d44c4e8d3a665fae73c2cfe2f933ce056c`, the maintained
+`npm run test:durable-reviews` suite passed **31/31** across its three configured
+files. These are retained results for that revision; the complete suite was not
+rerun for the hidden-review continuation below. It preserves the previous 22 checks, including public
 and legacy Mongo-ID casting, incompatible-envelope byte preservation, API
 workflow and report-logging privacy. Nine new checks cover cross-process writes,
 duplicate outcomes, report appends, timeout, ownership and cleanup failures, and
@@ -91,6 +93,59 @@ checking. No download or package-manager installation was performed. The
 unchanged lock records Mongoose 9.7.3, ESLint 10.6.0, Prettier 3.8.3 and Node types
 25.9.4, so this was not an exact locked installation. The manifest's Mongoose
 `^9.9.2` range includes the tested 9.10.4.
+
+## Hidden-review report validation (October 4, 2026)
+
+A report previously changed every review to `flagged`, including one explicitly
+hidden by a moderator. Since the public reader excludes only `hidden`, a new
+report could make the review public again. Both backends now record the report
+while preserving a stored `hidden` status. Mongo resolves the status, report append
+and count in the same update; `$literal` prevents report text from being interpreted
+as an aggregation expression.
+
+The actual file repository was imported with Node 24.19.0 and real filesystem
+operations. Add → hide → report → reload produced `flagged` and one public row
+on the parent, versus `hidden` and zero public rows with the repair. Both retained
+one report and the exact reason `"$status is literal"`.
+
+A separate, single standard Ubuntu job executed the actual Mongo repository,
+public facade and production Review model against MongoDB 8.0.32, using Node
+24.21.0 and Mongoose 9.10.4. It verified all six imported production source blobs
+before execution. The unchanged parent was
+`f871a5d44c4e8d3a665fae73c2cfe2f933ce056c`; the source candidate was
+`5d42259ff0465e4f6178fb67739c0451877fd46d`.
+
+| Mongo scenario | Parent | Repair |
+| --- | --- | --- |
+| Visible report flags review and preserves literal text | Pass | Pass |
+| Hidden review receives a new report | Fail | Pass |
+| Hidden review receives concurrent duplicate and new reports | Fail | Pass |
+| Concurrent hide/report, hide completes first | Fail | Pass |
+| Concurrent hide/report, report completes first | Pass | Pass |
+| Explicit unhide restores public visibility | Pass | Pass |
+| Total | 3 pass / 3 fail | 6 pass / 0 fail |
+
+The ordered scenarios put a promise barrier immediately before the real model
+update; both repository calls reached that boundary before selecting the order.
+Database calls, update payloads and returned documents were not simulated.
+The duplicate/new-report case used concurrent requests without that barrier.
+Checks also covered normalized reporter addresses, exact report counts, literal
+reason text, BSON report dates and the model's `_id: false` report subdocuments.
+
+[Execution run 37202755182](https://github.com/woahwhattheheck/prompt-hash/actions/runs/37202755182),
+[scenario artifact 11303711128](https://github.com/woahwhattheheck/prompt-hash/actions/runs/37202755182/artifacts/11303711128)
+and the
+[reproducible runner](https://github.com/woahwhattheheck/prompt-hash/blob/315f0810861ed3d34c68be82bbdadd8f276065df/scripts/review-moderation-mongo-acceptance.mjs)
+retain the evidence. Execution-only workflow and runner files remain on the
+separate verification branch.
+
+The existing reporting/moderation test now includes hidden-report persistence,
+duplicate rejection and explicit unhide, without adding a new test case. That
+extended Vitest case, lint, formatting, full typecheck and application build were
+not run in this continuation after the shared command runner disconnected.
+The Mongo job used an isolated Mongoose installation, not the complete lockfile
+environment. It establishes these repository behaviors, not live HTTP, replica
+failover, deployment throughput or sponsor acceptance.
 
 ## Public API
 
