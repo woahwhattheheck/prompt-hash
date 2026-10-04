@@ -18,24 +18,35 @@ export interface EventDeadLetterSink {
 export class InMemoryEventDeadLetter implements EventDeadLetterSink {
   private readonly records: DeadLetterRecord[] = [];
   private readonly maxSize: number;
+  private oldest = 0;
 
   constructor(maxSize = 1000) {
+    if (!Number.isSafeInteger(maxSize) || maxSize < 0) {
+      throw new RangeError("maxSize must be a non-negative safe integer");
+    }
     this.maxSize = maxSize;
   }
 
   push(record: DeadLetterRecord): void {
-    this.records.push(record);
-    if (this.records.length > this.maxSize) {
-      this.records.splice(0, this.records.length - this.maxSize);
+    if (this.maxSize === 0) return;
+    if (this.records.length < this.maxSize) {
+      this.records.push(record);
+      return;
     }
+    // Overwrite only the evicted slot; do not shift the whole retained window.
+    this.records[this.oldest] = record;
+    this.oldest = (this.oldest + 1) % this.maxSize;
   }
 
   list(): DeadLetterRecord[] {
-    return [...this.records];
+    return this.oldest === 0
+      ? this.records.slice()
+      : this.records.slice(this.oldest).concat(this.records.slice(0, this.oldest));
   }
 
   clear(): void {
     this.records.length = 0;
+    this.oldest = 0;
   }
 
   size(): number {
@@ -43,7 +54,13 @@ export class InMemoryEventDeadLetter implements EventDeadLetterSink {
   }
 
   byReason(reason: DeadLetterRecord["reason"]): DeadLetterRecord[] {
-    return this.records.filter((r) => r.reason === reason);
+    const matches: DeadLetterRecord[] = [];
+    // Iterate in FIFO order without materializing an intermediate list.
+    for (let offset = 0; offset < this.records.length; offset++) {
+      const record = this.records[(this.oldest + offset) % this.records.length];
+      if (record.reason === reason) matches.push(record);
+    }
+    return matches;
   }
 }
 
