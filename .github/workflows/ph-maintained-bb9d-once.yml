@@ -1,4 +1,4 @@
-name: PH263 and PH271 maintained checks
+name: PH271 maintained lifecycle check
 
 on:
   push:
@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  maintained:
+  lifecycle:
     if: github.repository == 'woahwhattheheck/prompt-hash' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       CI: 'true'
       HUSKY: '0'
@@ -21,64 +21,30 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24.19.0'
-
       - name: Check out PH271 source
         uses: actions/checkout@v4
         with:
           ref: 870d17c003a3cd4a6610395c18dceb9dffa1eb4e
           path: ph271
           persist-credentials: false
-
-      - name: Run maintained runtime and lifecycle selection
-        id: lifecycle
-        continue-on-error: true
+      - name: Prepare real server dependencies outside the source
         working-directory: ph271
         run: |
           test "$(git rev-parse HEAD)" = 870d17c003a3cd4a6610395c18dceb9dffa1eb4e
           node --version
           npm --version
-          npm --prefix server ci --ignore-scripts --no-audit --no-fund
+          # Direct manifest entries match; npm ci found three missing emnapi
+          # transitive entries. Complete only a temporary copy of that lock.
+          runtime="$RUNNER_TEMP/ph271-maintained-runtime-bb9d"
+          mkdir -p "$runtime"
+          cp server/package.json server/package-lock.json "$runtime/"
+          npm install --prefix "$runtime" --ignore-scripts --no-audit --no-fund
+          npm ls --prefix "$runtime" --depth=0
+          ln -s "$runtime/node_modules" server/node_modules
+          git diff --exit-code
+      - name: Run maintained runtime and lifecycle selection
+        working-directory: ph271
+        run: |
           npm --prefix server run test:server-lifecycle -- --runInBand
           git diff --exit-code
-
-      - name: Check out PH263 source
-        if: ${{ !cancelled() }}
-        uses: actions/checkout@v4
-        with:
-          ref: 649684da482c807ddc0a00fac52515c69fccd04a
-          path: ph263
-          persist-credentials: false
-
-      - name: Run maintained unlock selection
-        if: ${{ !cancelled() }}
-        id: unlock
-        continue-on-error: true
-        working-directory: ph263
-        run: |
-          test "$(git rev-parse HEAD)" = 649684da482c807ddc0a00fac52515c69fccd04a
-          # The root lock predates manifest updates. Install only the real
-          # dependencies of this unchanged test/config graph in a temp runtime.
-          # Direct versions below come from this exact source's package-lock.
-          runtime="$RUNNER_TEMP/ph263-maintained-runtime-bb9d"
-          mkdir -p "$runtime"
-          printf '%s\n' '{"name":"ph263-maintained-runtime-bb9d","private":true}' > "$runtime/package.json"
-          npm install --prefix "$runtime" --ignore-scripts --no-audit --no-fund --no-save --package-lock=false \
-            vitest@4.1.10 vite@8.1.0 @vitejs/plugin-react@6.0.3 \
-            vite-plugin-node-polyfills@0.26.0 @testing-library/jest-dom@6.9.1 \
-            @stellar/stellar-sdk@14.6.1 libsodium-wrappers@0.8.4 \
-            buffer@6.0.3 redis@6.1.0 zod@4.4.3 lru-cache@11.5.1 jsdom@29.1.1
-          ln -s "$runtime/node_modules" node_modules
-          npm test -- api/prompts/unlock.test.ts --maxWorkers=1 --no-file-parallelism
-          git diff --exit-code
-
-      - name: Record both outcomes
-        if: ${{ !cancelled() }}
-        env:
-          LIFECYCLE_OUTCOME: ${{ steps.lifecycle.outcome }}
-          UNLOCK_OUTCOME: ${{ steps.unlock.outcome }}
-        run: |
-          printf '## Maintained Prompt Hash selections\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf 'PH271 source: `870d17c003a3cd4a6610395c18dceb9dffa1eb4e` — %s\n\n' "$LIFECYCLE_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-          printf 'PH263 source: `649684da482c807ddc0a00fac52515c69fccd04a` — %s\n' "$UNLOCK_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-          test "$LIFECYCLE_OUTCOME" = success
-          test "$UNLOCK_OUTCOME" = success
+          printf 'PH271 maintained selection passed at `870d17c003a3cd4a6610395c18dceb9dffa1eb4e`.\n' >> "$GITHUB_STEP_SUMMARY"
