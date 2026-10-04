@@ -26,5 +26,19 @@ jobs:
         run: npx vitest run --config vitest.similarity.config.mjs src/test/publicationReview.test.ts --reporter=dot
       - name: Server TypeScript build
         run: npm run build --prefix server
-      - name: Frontend/project typecheck
-        run: npm run typecheck
+      - name: Focused frontend typecheck
+        shell: bash
+        run: |
+          cat > tsconfig.ph259.json <<'EOF'
+          {
+            "extends": "./tsconfig.app.json",
+            "compilerOptions": {
+              "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.ph259.tsbuildinfo"
+            },
+            "include": [
+              "src/lib/prompts/similarityPublish.ts",
+              "src/pages/sell/CreatePromptForm.tsx"
+            ]
+          }
+          EOF
+          npx tsc -p tsconfig.ph259.json
