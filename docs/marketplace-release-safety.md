@@ -25,10 +25,35 @@ random failures or apparent success unrelated to Stellar ledger state.
 | --- | --- |
 | `src/lib/marketplace/demoMode.ts` | Opt-in gate + startup assert |
 | `src/lib/marketplace/demo/demoMarketplaceAdapter.ts` | Deterministic fixtures |
-| `src/lib/marketplace/productionMarketplaceAdapter.ts` | Live wallet → ledger path |
+| `src/lib/marketplace/productionMarketplaceAdapter.ts` | Production entry points; live integration still required |
 | `src/lib/marketplace/marketplaceTx.ts` | Facade selecting demo vs production |
 | `Sell.tsx` / `Marketplace.tsx` / `PurchaseProgress.tsx` / `PromptModal.tsx` | UI wired through the facade |
 | `PromptHashClient.purchasePrompt` | Mock disabled in production; demo-only deterministic hash |
+
+## Current production integration boundary
+
+The current marketplace facade rejects production listing and purchase calls.
+Live wallet submission, ledger confirmation and fulfillment still need to be
+connected for these flows:
+
+| Entry point | Current production behavior |
+| --- | --- |
+| `listAsset` | Routes to `productionListAsset`, which always throws; the live wallet / `createPrompt` path is still required. |
+| `buyAsset` / `runPurchaseFlow` | Use `productionBuyAsset`, which calls `PromptHashClient.purchasePrompt`; that client method throws when `import.meta.env.PROD` is true. |
+
+See the [production adapter](../src/lib/marketplace/productionMarketplaceAdapter.ts)
+and the [client purchase method](../src/lib/stellar/promptHashClient.ts).
+
+The adapter emits `signature` and `network` pending events before calling the
+purchase method. Those labels do not establish wallet submission or ledger
+confirmation; the current production rejection prevents its later `confirming`
+and `success` events.
+
+Use the explicit development/test demo gates for deterministic fixtures. A
+passing source or bundle guard does not demonstrate live wallet, ledger or
+fulfillment integration. Before releasing live transactions, connect these entry
+points to the authoritative wallet/ledger/fulfillment path and verify its success
+and failure behavior end to end.
 
 ## Guards & tests
 
