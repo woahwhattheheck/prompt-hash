@@ -1,0 +1,576 @@
+{
+  "validation_commit": "c196cd0b81d1dfe0dff108176d6b659ffebad8c8",
+  "run_id": "37190015734",
+  "source_pins": {
+    "repository": "woahwhattheheck/prompt-hash",
+    "baseline_commit": "a9c7d579d5737456ec96064ea9a2796f56834bcf",
+    "candidate_commit": "6b0b8f70c18be2b89c6e7691f07983883dd389a7",
+    "baseline_service_blob": "b41e983f78d79080acdded85b185b42fecb0c5c1",
+    "candidate_service_blob": "3d249b8648de4e52dc4512ceca8bed85bd445ee5",
+    "file_blobs": {
+      "work/validation/ph277-mongo/payoutStatementService.before.ts": "b41e983f78d79080acdded85b185b42fecb0c5c1",
+      "server/src/services/payoutStatementService.ts": "3d249b8648de4e52dc4512ceca8bed85bd445ee5",
+      "server/src/constants/platformFee.ts": "e9001bbe60250837b171b95fb01a4fc9f5e8196c",
+      "work/validation/ph277-mongo/fixtures.mjs": "d5036564972d5ee2eb214a9ed4d48f8ea143d9e8",
+      "server/src/models/User.ts": "6621184c50cb6d311290427066323441c9ce8498",
+      "server/src/models/Prompt.ts": "b319b9287845522e95334014c4ff87311927eb03",
+      "server/src/models/Purchase.ts": "f8b01703cbb0ac6c142e4a0aa7e97b5a9cc37a53",
+      "server/src/models/FulfillmentRecord.ts": "a022db30513c8983e85400bdcfe6aaccdcf53a8f"
+    }
+  },
+  "status": "passed",
+  "methodology": {
+    "database": "Disposable MongoDB service, actual Mongoose models and original indexes",
+    "measured": "Wall time of actual aggregateSellerStatementFromDb, including database reads and reconciliation",
+    "samples": "100/1000: one untimed warmup per variant, three paired samples with alternating order; controls: one pair",
+    "deterministic_boundary": "Only crypto.randomUUID and no-argument Date construction; Date.now, performance.now, database, models and HMAC stay real",
+    "monitoring": "Mongo driver commandStarted; historical Purchase find is distinguished from the period find; getMore counted separately",
+    "scope": "Synthetic same-host Mongo timing, not production latency, throughput or concurrent-load evidence"
+  },
+  "cases": [
+    {
+      "case": "empty",
+      "refund_rows": 0,
+      "unique_pairs": 0,
+      "complete_statement_equal": true,
+      "csv_equal": true,
+      "json_equal": true,
+      "signatures_valid": true,
+      "before_median_ms": 8.420810000000074,
+      "after_median_ms": 5.566011000000003,
+      "observed_median_ratio": 1.5128985551771401,
+      "measurements": [
+        {
+          "order": [
+            "before",
+            "after"
+          ],
+          "before_ms": 8.420810000000074,
+          "after_ms": 5.566011000000003,
+          "before_commands": {
+            "commands": {
+              "find": 4
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 1,
+              "fulfillmentrecords": 1
+            },
+            "find": 4,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 0,
+            "singlePurchaseFind": 0,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 4
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 1,
+              "fulfillmentrecords": 1
+            },
+            "find": 4,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 0,
+            "singlePurchaseFind": 0,
+            "batchSizes": []
+          }
+        }
+      ],
+      "statement_sha256": "d16fbfd90dac21ac214f87ea2da6ab6c81e596ca6e7a48f48c91732a32509301"
+    },
+    {
+      "case": "100",
+      "refund_rows": 100,
+      "unique_pairs": 100,
+      "complete_statement_equal": true,
+      "csv_equal": true,
+      "json_equal": true,
+      "signatures_valid": true,
+      "before_median_ms": 74.359647,
+      "after_median_ms": 10.625830999999948,
+      "observed_median_ratio": 6.998007685234252,
+      "measurements": [
+        {
+          "order": [
+            "before",
+            "after"
+          ],
+          "before_ms": 83.67450800000006,
+          "after_ms": 10.625830999999948,
+          "before_commands": {
+            "commands": {
+              "find": 104
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 101,
+              "fulfillmentrecords": 1
+            },
+            "find": 104,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 100,
+            "singlePurchaseFind": 100,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 5
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 2,
+              "fulfillmentrecords": 1
+            },
+            "find": 5,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              100
+            ]
+          }
+        },
+        {
+          "order": [
+            "after",
+            "before"
+          ],
+          "before_ms": 74.359647,
+          "after_ms": 11.490799000000038,
+          "before_commands": {
+            "commands": {
+              "find": 104
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 101,
+              "fulfillmentrecords": 1
+            },
+            "find": 104,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 100,
+            "singlePurchaseFind": 100,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 5
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 2,
+              "fulfillmentrecords": 1
+            },
+            "find": 5,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              100
+            ]
+          }
+        },
+        {
+          "order": [
+            "before",
+            "after"
+          ],
+          "before_ms": 71.9153540000001,
+          "after_ms": 10.324640999999929,
+          "before_commands": {
+            "commands": {
+              "find": 104
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 101,
+              "fulfillmentrecords": 1
+            },
+            "find": 104,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 100,
+            "singlePurchaseFind": 100,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 5
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 2,
+              "fulfillmentrecords": 1
+            },
+            "find": 5,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              100
+            ]
+          }
+        }
+      ],
+      "statement_sha256": "4084c6031e91c2c3ac1063a987756ad0a83ce88a56b4dcd062a80f61e38acc57"
+    },
+    {
+      "case": "1000",
+      "refund_rows": 1000,
+      "unique_pairs": 1000,
+      "complete_statement_equal": true,
+      "csv_equal": true,
+      "json_equal": true,
+      "signatures_valid": true,
+      "before_median_ms": 535.6988409999999,
+      "after_median_ms": 58.44115799999963,
+      "observed_median_ratio": 9.166465199064044,
+      "measurements": [
+        {
+          "order": [
+            "before",
+            "after"
+          ],
+          "before_ms": 538.4043139999999,
+          "after_ms": 59.558182999999644,
+          "before_commands": {
+            "commands": {
+              "find": 1004,
+              "getMore": 2
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 1001,
+              "fulfillmentrecords": 1
+            },
+            "find": 1004,
+            "getMore": 2,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1000,
+            "singlePurchaseFind": 1000,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 14,
+              "getMore": 2
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 11,
+              "fulfillmentrecords": 1
+            },
+            "find": 14,
+            "getMore": 2,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 10,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100
+            ]
+          }
+        },
+        {
+          "order": [
+            "after",
+            "before"
+          ],
+          "before_ms": 535.6988409999999,
+          "after_ms": 58.44115799999963,
+          "before_commands": {
+            "commands": {
+              "find": 1004,
+              "getMore": 2
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 1001,
+              "fulfillmentrecords": 1
+            },
+            "find": 1004,
+            "getMore": 2,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1000,
+            "singlePurchaseFind": 1000,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 14,
+              "getMore": 2
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 11,
+              "fulfillmentrecords": 1
+            },
+            "find": 14,
+            "getMore": 2,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 10,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100
+            ]
+          }
+        },
+        {
+          "order": [
+            "before",
+            "after"
+          ],
+          "before_ms": 517.8185710000002,
+          "after_ms": 54.93709799999988,
+          "before_commands": {
+            "commands": {
+              "find": 1004,
+              "getMore": 2
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 1001,
+              "fulfillmentrecords": 1
+            },
+            "find": 1004,
+            "getMore": 2,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1000,
+            "singlePurchaseFind": 1000,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 14,
+              "getMore": 2
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 11,
+              "fulfillmentrecords": 1
+            },
+            "find": 14,
+            "getMore": 2,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 10,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100,
+              100
+            ]
+          }
+        }
+      ],
+      "statement_sha256": "265058f51571a571188d963725d766d7ec5d1acfc5641a7b2847ec97733d7775"
+    },
+    {
+      "case": "mixed",
+      "refund_rows": 5,
+      "unique_pairs": 4,
+      "complete_statement_equal": true,
+      "csv_equal": true,
+      "json_equal": true,
+      "signatures_valid": true,
+      "before_median_ms": 6.488357000000178,
+      "after_median_ms": 3.877661999999873,
+      "observed_median_ratio": 1.6732652304405053,
+      "measurements": [
+        {
+          "order": [
+            "before",
+            "after"
+          ],
+          "before_ms": 6.488357000000178,
+          "after_ms": 3.877661999999873,
+          "before_commands": {
+            "commands": {
+              "find": 9
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 6,
+              "fulfillmentrecords": 1
+            },
+            "find": 9,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 5,
+            "singlePurchaseFind": 5,
+            "batchSizes": []
+          },
+          "after_commands": {
+            "commands": {
+              "find": 5
+            },
+            "collections": {
+              "users": 1,
+              "prompts": 1,
+              "purchases": 2,
+              "fulfillmentrecords": 1
+            },
+            "find": 5,
+            "getMore": 0,
+            "periodPurchaseFind": 1,
+            "historicalPurchaseFind": 1,
+            "singlePurchaseFind": 0,
+            "batchSizes": [
+              4
+            ]
+          }
+        }
+      ],
+      "statement_sha256": "41eaa6944e3575d97f8d1e31806963ecea3b5ed30c010d6a877ffcaba450cd2f"
+    }
+  ],
+  "runtime": {
+    "node": "v24.19.0",
+    "mongoose": "9.9.2",
+    "mongodb": "7.0.14"
+  },
+  "indexes": {
+    "Purchase": [
+      {
+        "name": "_id_",
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "promptId_1",
+        "key": {
+          "promptId": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "buyerWallet_1",
+        "key": {
+          "buyerWallet": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "saved_1",
+        "key": {
+          "saved": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "promptId_1_buyerWallet_1",
+        "key": {
+          "promptId": 1,
+          "buyerWallet": 1
+        },
+        "unique": true
+      }
+    ],
+    "FulfillmentRecord": [
+      {
+        "name": "_id_",
+        "key": {
+          "_id": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "promptId_1",
+        "key": {
+          "promptId": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "buyerWallet_1",
+        "key": {
+          "buyerWallet": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "status_1",
+        "key": {
+          "status": 1
+        },
+        "unique": false
+      },
+      {
+        "name": "promptId_1_buyerWallet_1",
+        "key": {
+          "promptId": 1,
+          "buyerWallet": 1
+        },
+        "unique": true
+      }
+    ]
+  },
+  "peak_rss_bytes": 189157376,
+  "execution": {
+    "job_id": 111400056875,
+    "job_url": "https://github.com/woahwhattheheck/prompt-hash/actions/runs/37190015734/job/111400056875",
+    "workflow_url": "https://github.com/woahwhattheheck/prompt-hash/actions/runs/37190015734",
+    "job_conclusion": "success",
+    "started_at": "2026-10-04T08:46:40Z",
+    "completed_at": "2026-10-04T08:47:18Z",
+    "job_wall_seconds": 38,
+    "vitest_version": "4.1.10",
+    "vite_version": "8.3.2",
+    "test_files_passed": 1,
+    "benchmark_tests_passed": 1,
+    "vitest_duration_seconds": 3.88,
+    "benchmark_test_seconds": 3.43,
+    "service_containers_stopped": true,
+    "uploaded_artifacts": 0
+  }
+}
