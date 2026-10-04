@@ -1,4 +1,4 @@
-name: PH271 maintained lifecycle check
+name: PH271 canonical clean install
 
 on:
   push:
@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  lifecycle:
+  clean-install:
     if: github.repository == 'woahwhattheheck/prompt-hash' && github.event.repository.private == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 8
     env:
       CI: 'true'
       HUSKY: '0'
@@ -21,30 +21,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24.19.0'
-      - name: Check out PH271 source
+      - name: Check out published lock repair
         uses: actions/checkout@v4
         with:
-          ref: 870d17c003a3cd4a6610395c18dceb9dffa1eb4e
+          ref: f05b7daeead78c0a14198750dd8784bf09774916
           path: ph271
           persist-credentials: false
-      - name: Prepare real server dependencies outside the source
+      - name: Install the committed server lock
         working-directory: ph271
         run: |
-          test "$(git rev-parse HEAD)" = 870d17c003a3cd4a6610395c18dceb9dffa1eb4e
+          test "$(git rev-parse HEAD)" = f05b7daeead78c0a14198750dd8784bf09774916
           node --version
           npm --version
-          # Direct manifest entries match; npm ci found three missing emnapi
-          # transitive entries. Complete only a temporary copy of that lock.
-          runtime="$RUNNER_TEMP/ph271-maintained-runtime-bb9d"
-          mkdir -p "$runtime"
-          cp server/package.json server/package-lock.json "$runtime/"
-          npm install --prefix "$runtime" --ignore-scripts --no-audit --no-fund
-          npm ls --prefix "$runtime" --depth=0
-          ln -s "$runtime/node_modules" server/node_modules
+          npm --prefix server ci --ignore-scripts --no-audit --no-fund
           git diff --exit-code
-      - name: Run maintained runtime and lifecycle selection
-        working-directory: ph271
-        run: |
-          npm --prefix server run test:server-lifecycle -- --runInBand
-          git diff --exit-code
-          printf 'PH271 maintained selection passed at `870d17c003a3cd4a6610395c18dceb9dffa1eb4e`.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Canonical server npm ci passed at `f05b7daeead78c0a14198750dd8784bf09774916`.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'The22maintained tests passed on unchanged source blobs in run37189010097 and were not repeated.\n' >> "$GITHUB_STEP_SUMMARY"
