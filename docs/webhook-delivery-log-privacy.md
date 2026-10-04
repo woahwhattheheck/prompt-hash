@@ -64,7 +64,11 @@ HTTP summaries and known reason codes, and replace unrecognized codes with
 ## Retention policy
 
 - Default TTL: **30 days** from create (`expiresAt`).
-- Override with `WEBHOOK_DELIVERY_LOG_TTL_DAYS` (positive integer; capped at 3650).
+- Override with `WEBHOOK_DELIVERY_LOG_TTL_DAYS`; positive day counts are rounded
+  down to whole days and capped at 3650.
+- Invalid, non-finite, zero or negative values, and values that round below one
+  whole day (such as `0.5`), use the 30-day default. They cannot configure a
+  zero-day expiry for a newly created log.
 - MongoDB TTL index on `expiresAt` (`expireAfterSeconds: 0`) removes expired documents.
 - Ops may also call `purgeExpiredDeliveryLogs()` for an explicit synchronous purge.
 

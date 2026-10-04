@@ -280,6 +280,30 @@ describe("TTL / retention", () => {
     expect(expires.toISOString()).toBe("2026-01-08T00:00:00.000Z");
   });
 
+  it.each(["0.5", "0.999", "1e-3", "5e-324"])(
+    "defaults to 30 days when %s rounds below one day",
+    (raw) => {
+      process.env[TTL_DAYS] = raw;
+      const from = new Date("2026-01-01T00:00:00.000Z");
+      const expires = computeDeliveryLogExpiresAt(from);
+      expect(expires.toISOString()).toBe("2026-01-31T00:00:00.000Z");
+      expect(expires.getTime()).toBeGreaterThan(from.getTime());
+    },
+  );
+
+  it.each<[string, number]>([
+    ["1.9", 1],
+    ["3650.9", 3650],
+    ["4000", 3650],
+  ])("retains the whole-day rounding and cap for %s", (raw, expectedDays) => {
+    process.env[TTL_DAYS] = raw;
+    const from = new Date("2026-01-01T00:00:00.000Z");
+    const expires = computeDeliveryLogExpiresAt(from);
+    expect(expires.getTime() - from.getTime()).toBe(
+      expectedDays * 24 * 60 * 60 * 1000,
+    );
+  });
+
   it("purgeExpiredDeliveryLogs deletes only expired rows", async () => {
     const model = {
       deleteMany: jest.fn(async (_filter: object) => ({ deletedCount: 2 })),

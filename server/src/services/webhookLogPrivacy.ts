@@ -84,9 +84,9 @@ const COMPACT_SENSITIVE_QUERY_KEYS = new Set(
 function parseTtlDays(): number {
   const raw = process.env.WEBHOOK_DELIVERY_LOG_TTL_DAYS;
   if (raw == null || raw === "") return DEFAULT_DELIVERY_LOG_TTL_DAYS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_DELIVERY_LOG_TTL_DAYS;
-  return Math.min(Math.floor(n), 3650);
+  const days = Math.floor(Number(raw));
+  if (!Number.isFinite(days) || days <= 0) return DEFAULT_DELIVERY_LOG_TTL_DAYS;
+  return Math.min(days, 3650);
 }
 
 /** Compute expiresAt for a new delivery log entry. */
