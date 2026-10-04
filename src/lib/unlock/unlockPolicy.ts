@@ -54,6 +54,9 @@ export const DEFAULT_LOOKUP_TIMEOUT_MS = 3_000;
 /** Default signed-snapshot freshness window. */
 export const DEFAULT_POLICY_CACHE_TTL_MS = 30_000;
 
+/** Bound process-local snapshot retention even when buyers never return. */
+export const DEFAULT_POLICY_CACHE_MAX_ENTRIES = 10_000;
+
 export interface PolicySnapshotPayload {
   promptId: string;
   buyerWallet: string;
@@ -126,12 +129,60 @@ export function verifyPolicySnapshot(
   }
 }
 
+interface CachedPolicySnapshot {
+  token: string;
+  older?: string;
+  newer?: string;
+}
+
 export class UnlockPolicyCache {
-  private readonly store = new Map<string, string>();
+  private readonly store = new Map<string, CachedPolicySnapshot>();
+  private readonly maxEntries: number;
+  private oldestKey: string | undefined;
+  private newestKey: string | undefined;
   private readonly updates = new Map<
     string,
     { nextOrder: number; latestPublished: number; pending: number }
   >();
+
+  constructor(maxEntries = DEFAULT_POLICY_CACHE_MAX_ENTRIES) {
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+      throw new RangeError("Policy cache capacity must be a positive safe integer");
+    }
+    this.maxEntries = maxEntries;
+  }
+
+  /** Unlink one snapshot without changing pending lookup publication order. */
+  private removeSnapshot(key: string): void {
+    const entry = this.store.get(key);
+    if (!entry) return;
+    if (entry.older !== undefined) {
+      this.store.get(entry.older)!.newer = entry.newer;
+    } else {
+      this.oldestKey = entry.newer;
+    }
+    if (entry.newer !== undefined) {
+      this.store.get(entry.newer)!.older = entry.older;
+    } else {
+      this.newestKey = entry.older;
+    }
+    this.store.delete(key);
+  }
+
+  /** Evict by publication order in O(1), without scanning all cached keys. */
+  private storeSnapshot(key: string, token: string): void {
+    this.removeSnapshot(key);
+    if (this.newestKey !== undefined) {
+      this.store.get(this.newestKey)!.newer = key;
+    } else {
+      this.oldestKey = key;
+    }
+    this.store.set(key, { token, older: this.newestKey });
+    this.newestKey = key;
+    if (this.store.size > this.maxEntries) {
+      this.removeSnapshot(this.oldestKey!);
+    }
+  }
 
   /** Order successful lookup writes independently of wall-clock timestamps. */
   beginSnapshotUpdate(promptId: string, buyerWallet: string) {
@@ -154,7 +205,7 @@ export class UnlockPolicyCache {
           order > state.latestPublished
         ) {
           state.latestPublished = order;
-          this.store.set(key, token);
+          this.storeSnapshot(key, token);
         }
       },
       finish: () => {
@@ -169,23 +220,30 @@ export class UnlockPolicyCache {
   }
 
   get(promptId: string, buyerWallet: string): string | undefined {
-    return this.store.get(cacheKey(promptId, buyerWallet));
+    return this.store.get(cacheKey(promptId, buyerWallet))?.token;
   }
 
   set(promptId: string, buyerWallet: string, token: string): void {
     const key = cacheKey(promptId, buyerWallet);
     this.updates.delete(key);
-    this.store.set(key, token);
+    this.storeSnapshot(key, token);
   }
 
   clear(): void {
     this.store.clear();
+    this.oldestKey = undefined;
+    this.newestKey = undefined;
     this.updates.clear();
+  }
+
+  /** Drop retained data while allowing an in-flight live lookup to refresh it. */
+  evict(promptId: string, buyerWallet: string): void {
+    this.removeSnapshot(cacheKey(promptId, buyerWallet));
   }
 
   delete(promptId: string, buyerWallet: string): void {
     const key = cacheKey(promptId, buyerWallet);
-    this.store.delete(key);
+    this.evict(promptId, buyerWallet);
     this.updates.delete(key);
   }
 }
@@ -286,7 +344,8 @@ function tryCache(
     return null;
   }
   if (now - snapshot.evaluatedAt > ttlMs) {
-    // Stale — fail closed (caller treats null as unavailable when live failed).
+    // Stale — fail closed and release the snapshot instead of retaining it.
+    cache.evict(promptId, buyerWallet);
     return null;
   }
   return decisionFromSnapshot(snapshot, "cache");

@@ -35,6 +35,143 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
     return impl;
   }
 
+  it("bounds snapshot retention and fails closed for an evicted buyer", async () => {
+    cache = new UnlockPolicyCache(2);
+    const options = { buyerWallet: BUYER, signingSecret: SECRET, cache, now };
+    for (const [promptId, status] of [
+      ["1", "delivered"],
+      ["2", "refunded"],
+      ["3", "refund_requested"],
+    ] as const) {
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        promptId,
+        findFulfillment: async () => ({ status }),
+      });
+    }
+    expect(cache.get("1", BUYER)).toBeUndefined();
+    const decisions = await Promise.all(
+      ["1", "2", "3"].map((promptId) =>
+        evaluateUnlockFulfillmentPolicy({
+          ...options,
+          promptId,
+          findFulfillment: async () => { throw new Error("connection lost"); },
+        }),
+      ),
+    );
+    expect(decisions[0].outcome).toBe("unavailable");
+    expect(decisions[1]).toMatchObject({ outcome: "deny", reason: "refunded" });
+    expect(decisions[2]).toMatchObject({ outcome: "deny", reason: "refund_requested" });
+  });
+
+  it("retains newly published snapshots without refreshing their TTL on reads", async () => {
+    cache = new UnlockPolicyCache(2);
+    const options = { buyerWallet: BUYER, signingSecret: SECRET, cache };
+    for (const [promptId, status, evaluatedAt] of [
+      ["1", "delivered", now],
+      ["2", "delivered", now],
+      ["1", "refunded", now + 1],
+    ] as const) {
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        promptId,
+        now: evaluatedAt,
+        findFulfillment: async () => ({ status }),
+      });
+    }
+    cache.get("2", BUYER);
+    await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      promptId: "3",
+      now: now + 2,
+      findFulfillment: async () => null,
+    });
+    expect(cache.get("2", BUYER)).toBeUndefined();
+    expect(verifyPolicySnapshot(cache.get("1", BUYER)!, SECRET)).toMatchObject({
+      status: "refunded",
+      evaluatedAt: now + 1,
+    });
+  });
+
+  it("does not resurrect an evicted newer denial from a delayed older lookup", async () => {
+    cache = new UnlockPolicyCache(1);
+    const options = { promptId: PROMPT_ID, buyerWallet: BUYER, signingSecret: SECRET, cache, now };
+    let releaseOlder!: () => void;
+    const pendingOlder = evaluateUnlockFulfillmentPolicy({
+      ...options,
+      findFulfillment: () => new Promise((resolve) => {
+        releaseOlder = () => resolve({ status: "delivered" });
+      }),
+    });
+    await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      findFulfillment: async () => ({ status: "refunded" }),
+    });
+    await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      promptId: "other",
+      findFulfillment: async () => null,
+    });
+    releaseOlder();
+    expect(await pendingOlder).toMatchObject({ outcome: "allow", source: "live" });
+    expect(cache.get(PROMPT_ID, BUYER)).toBeUndefined();
+    expect(await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      findFulfillment: async () => { throw new Error("connection lost"); },
+    })).toMatchObject({ outcome: "unavailable" });
+    expect(cache.get("other", BUYER)).toBeDefined();
+  });
+
+  it("keeps bounded retention usable after explicit deletion and clear", async () => {
+    cache = new UnlockPolicyCache(3);
+    for (const key of ["1", "2", "3"]) cache.set(key, BUYER, key);
+    cache.delete("2", BUYER);
+    cache.set("4", BUYER, "4");
+    cache.set("5", BUYER, "5");
+    expect(["1", "2", "3", "4", "5"].map((key) => cache.get(key, BUYER)))
+      .toEqual([undefined, undefined, "3", "4", "5"]);
+    cache.delete("5", BUYER);
+    cache.delete("3", BUYER);
+    cache.delete("4", BUYER);
+    cache.set("6", BUYER, "6");
+    expect(cache.get("6", BUYER)).toBe("6");
+    cache.clear();
+    cache.set("7", BUYER, "7");
+    expect(cache.get("6", BUYER)).toBeUndefined();
+    expect(cache.get("7", BUYER)).toBe("7");
+  });
+
+  it("allows an in-flight refresh to publish after another lookup evicts stale data", async () => {
+    const options = { promptId: PROMPT_ID, buyerWallet: BUYER, signingSecret: SECRET, cache };
+    await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      now,
+      findFulfillment: async () => ({ status: "delivered" }),
+    });
+    let releaseRefresh!: () => void;
+    const refresh = evaluateUnlockFulfillmentPolicy({
+      ...options,
+      now: now + DEFAULT_POLICY_CACHE_TTL_MS + 1,
+      findFulfillment: () => new Promise((resolve) => {
+        releaseRefresh = () => resolve({ status: "refunded" });
+      }),
+    });
+    const unavailable = await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      now: now + DEFAULT_POLICY_CACHE_TTL_MS + 2,
+      findFulfillment: async () => { throw new Error("connection lost"); },
+    });
+    expect(unavailable.outcome).toBe("unavailable");
+    expect(cache.get(PROMPT_ID, BUYER)).toBeUndefined();
+    releaseRefresh();
+    await refresh;
+    expect(await evaluateUnlockFulfillmentPolicy({
+      ...options,
+      now: now + DEFAULT_POLICY_CACHE_TTL_MS + 3,
+      findFulfillment: async () => { throw new Error("connection lost"); },
+    })).toMatchObject({ outcome: "deny", reason: "refunded", source: "cache" });
+  });
+
   it("allows when no fulfillment record exists", async () => {
     const decision = await evaluateUnlockFulfillmentPolicy({
       promptId: PROMPT_ID,
@@ -150,6 +287,7 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
       ttlMs: DEFAULT_POLICY_CACHE_TTL_MS,
     });
     expect(decision.outcome).toBe("unavailable");
+    expect(cache.get(PROMPT_ID, BUYER)).toBeUndefined();
     if (decision.outcome === "unavailable") {
       expect(decision.message).toBe(POLICY_UNAVAILABLE_MESSAGE);
     }
