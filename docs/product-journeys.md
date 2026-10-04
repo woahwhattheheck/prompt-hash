@@ -16,7 +16,9 @@ This document explains how PromptHash works from both the **creator** and **buye
 
 ## Overview
 
-PromptHash Stellar is a marketplace where creators sell reusable AI prompt licenses and buyers purchase access in XLM. The key design principle is that **the full prompt is never stored in plaintext** — it is encrypted in the browser before anything touches the blockchain.
+PromptHash Stellar is a marketplace where creators sell reusable AI prompt licenses and buyers purchase access in XLM. The listing payload is encrypted in the browser before it is passed to the submission client. The current similarity check is a separate step: it sends the title and full prompt text to the backend before that encryption.
+
+The contract flow described here includes intended integration behavior. On this branch, the creator's `createPrompt` client still returns an explicit mock result; the current boundary is described in Step 4. A successful form response does not establish live contract submission.
 
 Three layers work together:
 
@@ -51,31 +53,31 @@ The creator fills in the listing form at `/sell`:
 
 A listing quality checklist runs before submission to catch weak or missing metadata. Required fields block submission; recommended improvements show as non-blocking warnings.
 
-Before the on-chain submit, a **similarity publish gate** compares the draft to existing listings (`allow` / `review` / `block`). Blocked drafts cannot publish until revised or overridden; review requires an explicit creator acknowledgment. See [similarity-publish-gate.md](./similarity-publish-gate.md).
+Before encryption, the form sends the title and full prompt text as JSON to `/api/fingerprint/publish-check` and receives `allow`, `review` or `block`. A blocked result stops this form. Review requires a second acknowledged submission, then follows the same listing-helper path as allow; the check does not persist a pending listing or review hold. Stored-prompt maintainer overrides do not automatically authorize a later new-draft check. See [similarity-publish-gate.md](./similarity-publish-gate.md) for the current privacy and moderation boundaries.
 
 ### Step 3 — Browser-side encryption
 
-When the creator clicks "Create prompt listing", the browser:
+Once the similarity gate allows the form to continue, the browser:
 
 1. Generates a random AES-GCM key.
 2. Encrypts the full prompt with that key.
 3. Wraps (encrypts) the AES key against the unlock service's public key so only the unlock service can unwrap it.
 4. Computes a SHA-256 content hash of the plaintext for integrity verification later.
 
-The plaintext never leaves the browser unencrypted.
+This encryption protects the listing payload passed to `createPrompt`. It does not encrypt the earlier similarity request: the comparison backend has already received readable draft text. Transport security and trust in that backend are separate from content-key encryption.
 
 **Library:** `src/lib/crypto/promptCrypto.ts`
 
-### Step 4 — Submit to Soroban
+### Step 4 — Prepare the listing payload
 
-The app calls `create_prompt` on the Soroban contract with:
+The form passes the following fields to the `createPrompt` client for the intended Soroban `create_prompt` call:
 
 - public metadata (image, title, category, preview, price)
 - encrypted payload and IV
 - wrapped AES key
 - content hash
 
-The transaction is signed by the creator's wallet and submitted to the Stellar network.
+The current client ignores the supplied signer and listing input and returns `{ success: true, txHash: "tx_mock", promptId: "123" }`. It does not sign or submit a transaction. The form displays that mock result as success; live wallet signing, contract submission and confirmation remain to be integrated on this branch.
 
 **Contract method:** `create_prompt` in `contracts/prompt-hash/src/contract.rs`  
 **Client helper:** `src/lib/stellar/promptHashClient.ts`

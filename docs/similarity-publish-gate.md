@@ -4,13 +4,13 @@ Issue: [#242](https://github.com/Prompt-Hash-Stellar/prompt-hash/issues/242)
 
 ## Purpose
 
-Before a creator submits a listing from `/sell`, the app checks the draft against indexed prompts and maps the similarity score to a **publication decision**:
+The current `/sell` form checks the draft against indexed prompts and maps the similarity score to a **pre-submission decision**. These are form decisions; the persistence and live-submission limits below are part of the current workflow:
 
 | Score | Detection flag | Decision | Behavior |
 | --- | --- | --- | --- |
-| `< 0.70` | `clean` | **allow** | Publish proceeds |
-| `0.70`–`0.89` | `suspicious` | **review** | Creator must acknowledge; listing is held for maintainer review |
-| `≥ 0.90` | `highly_similar` | **block** | Submit disabled until the draft changes or a maintainer overrides |
+| `< 0.70` | `clean` | **allow** | The form can continue to the listing helper |
+| `0.70 ≤ score < 0.90` | `suspicious` | **review** | First submission stops for acknowledgment; an acknowledged review can continue to the same listing helper |
+| `≥ 0.90` | `highly_similar` | **block** | This form stops and disables submission for the current blocked result |
 
 ## API
 
@@ -21,6 +21,16 @@ Before a creator submits a listing from `/sell`, the app checks the draft agains
 ## Creator feedback
 
 `feedback` includes a title, summary, and concrete actions (rewrite guidance, appeal path). The sell form renders this via `SimilarityPublishFeedback`.
+
+## Current publication and privacy boundary
+
+The form sends the title and **full prompt text** as JSON to `/api/fingerprint/publish-check` before calling `encryptPromptPlaintext`. The backend receives readable draft text for comparison. HTTPS can protect transport, but the similarity request is not encrypted with the prompt's content key and the full prompt does not remain solely in the browser. Use this flow only with a backend trusted to receive that draft.
+
+The publish-check endpoint reads indexed candidates and returns the calculated decision and feedback. It does not persist a pending listing or review hold. After an acknowledged `review`, the form encrypts the draft and calls the same `createPrompt` helper used for `allow`, without passing a review decision, approval or hold marker. Existing feedback saying a listing is held or sent to review describes intended moderation behavior; that durable hold is not implemented by this path.
+
+The current `PromptHashClient.createPrompt` is still a stub returning `{ success: true, txHash: "tx_mock", promptId: "123" }`. It does not invoke the supplied wallet signer or submit a contract transaction. A form success message is therefore not evidence of on-chain publication on this branch.
+
+The authenticated override below updates an **existing indexed Prompt** and its audit. A later new-draft publish-check recomputes similarity from candidate text; it does not consume that override as an admission decision for the draft. Persisted review enforcement, binding a pending draft to a maintainer decision, and live contract submission remain integration work. The existing override authorization and audit guarantees remain separate.
 
 ## Override audit
 
@@ -64,4 +74,4 @@ Install the repository's root test dependencies and existing server dependencies
 npm run test:similarity -- --maxWorkers=1 --no-file-parallelism
 ```
 
-The focused suite contains 39 existing similarity tests and 35 override regressions. The override tests execute the actual Express router, shared principal verifier, service, and Mongoose query casting/update validators. Only the MongoDB collection boundary is replaced with a deterministic adapter that applies guarded writes. This verifies request behavior and failure handling; it is not a claim of native MongoDB durability, replica-set transaction behavior, or a hosted deployment. No live database, wallet, or administrator credentials are needed for these tests.
+The focused suite contains similarity algorithm and override regressions, including the exact-expiry and immediately-before-expiry cases. The override tests execute the actual Express router, shared principal verifier, service, and Mongoose query casting/update validators. Only the MongoDB collection boundary is replaced with a deterministic adapter that applies guarded writes. This verifies request behavior and failure handling; it is not a claim of native MongoDB durability, replica-set transaction behavior, or a hosted deployment. No live database, wallet, or administrator credentials are needed for these tests.
