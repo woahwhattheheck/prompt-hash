@@ -69,7 +69,13 @@ async function buildDefaultRepository(): Promise<ReviewRepository> {
 export async function getReviewRepository(): Promise<ReviewRepository> {
   if (configured) return configured;
   if (!defaultPromise) {
-    defaultPromise = buildDefaultRepository();
+    const pending = buildDefaultRepository();
+    defaultPromise = pending;
+    // Retry failed initialization on a later request, not in an automatic loop.
+    // A retired failure must not clear a newer configured/default repository.
+    void pending.catch(() => {
+      if (defaultPromise === pending) defaultPromise = null;
+    });
   }
   return defaultPromise;
 }
