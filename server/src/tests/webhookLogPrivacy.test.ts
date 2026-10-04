@@ -182,6 +182,26 @@ describe("destination encryption rotation", () => {
     expect(reencrypted!.keyVersion).toBe(2);
     expect(decryptDestination(reencrypted!.ciphertext, 2)).toBe(raw);
   });
+
+  it("keeps the current key authoritative when the previous key reuses its version", () => {
+    const currentKey = randomBytes(32).toString("hex");
+    const previousKey = randomBytes(32).toString("hex");
+    const raw = "https://hooks.example.com/duplicate-version?token=current";
+
+    process.env[ENC_KEY] = currentKey;
+    process.env[ENC_VER] = "7";
+    process.env[ENC_PREV] = previousKey;
+    process.env[ENC_PREV_VER] = "7";
+
+    const encrypted = encryptDestination(raw);
+    expect(encrypted).not.toBeNull();
+    expect(encrypted!.keyVersion).toBe(7);
+
+    delete process.env[ENC_PREV];
+    delete process.env[ENC_PREV_VER];
+
+    expect(decryptDestination(encrypted!.ciphertext, 7)).toBe(raw);
+  });
 });
 
 describe("error normalization", () => {
