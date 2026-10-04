@@ -19,13 +19,31 @@ This continuation adds atomic leases and claim-token fencing to both outbox stor
 
 Destination writes carry the acceptance ID and retain `AuditLog.create` with the existing immutable-record and hash-chain save middleware. A unique partial index prevents duplicate rows for that ID. A duplicate-key error counts as successful delivery only after the exact acceptance ID is found. A failed acknowledgement leaves the claim recoverable and does not consume persistence retries, including when `maxRetries=0`.
 
-The existing operations guide describes these behaviors and their rollout limits. This recovery continuation preserves the unlock handler, dependency manifests, hash-chain algorithm and request-triggered worker arrangement.
+The existing operations guide describes these behaviors and their rollout limits. The f863e3f3 recovery continuation preserved the unlock handler, dependency manifests, hash-chain algorithm and request-triggered worker arrangement.
 
 ## Unlock test fixture restoration
 
 Commit `649684da482c807ddc0a00fac52515c69fccd04a`, a child of `650ffcac644e57da6280705fb9739842917992b7`, restores 41 deleted lines in `api/prompts/unlock.test.ts`: the original webhook mock, handler import and `setupUnlockFixture` definition. Their deletion left the maintained suite unable to parse. The durable-queue mock and all 11 existing test bodies are preserved.
 
 This restoration changes only the test file. The published queue, Mongo adapter, models, operations guide and production unlock handler retain their prior source.
+
+## Delivery-key identity
+
+Commit `b8c6f1556645d7d4539c567a65453feb8e472ef6` retains distinct delimiter-bearing critical events instead of returning another event's receipt. Ordinary delivery keys and lookup counts are unchanged. Matching legacy records preserve their acceptance ID; an ambiguous legacy key cannot substitute for a different stored payload. Existing lease, retry, backlog and destination-deduplication behavior is retained.
+
+The complete production queue module on Node 22.16.0 passed seven focused cases at that source revision; the same cases on parent `649684da` had four passes and three failures. The selection covered distinct-event retention and drain, exact retries, legacy compatibility, saturation and lookup errors. This was not Mongo, HTTP, full-application or hosted-CI execution. [Source-bound evidence and rollout limits](https://github.com/woahwhattheheck/prompt-hash/blob/b8c6f1556645d7d4539c567a65453feb8e472ef6/docs/durable-audit-delivery-keys.md) are retained on the original branch. All accepting writers must be upgraded; older discarded events cannot be reconstructed by this change.
+
+## Retry timing and server recovery
+
+Current source: `3d38282b53830e978e44b8a9e70594f52f36e12b`, on the original contribution branch.
+
+The retry-clock change at `a7bdbba49ae375e2e8085aca16ab89dbe80621a1` measures backoff after persistence rejects, so time spent awaiting a failed write does not consume its retry delay. That one-line change was source-reviewed; no separate test or build was run.
+
+The following commit starts one audit recovery loop with the long-lived HTTP server. It reuses the existing Mongo connection helper and token-fenced drain, processes up to 50 due rows immediately, then waits one second after each completed call. Connection and drain failures leave polling active. SIGINT/SIGTERM stop new polls, close HTTP, await active requests and the current drain, then disconnect the shared Mongo connection. Existing request-triggered delivery remains.
+
+One focused Node 24.19.0 check loaded the real worker and queue with an in-memory store, controlled timers/clock and controlled persistence. An initial connection failure and one failed write recovered a retained event across three polls and two writes. Maximum concurrent worker calls was one; stop waited for a held successful write and left no timer. This was not a Mongo, HTTP-shutdown, full-suite, build or deployed-restart execution.
+
+The three published files read back exactly: worker `cd69ee8f8371ec5adc29577493d9a73e029687e8`, server `cab33ab4f44ccd926e6dbf434114f85983b32261`, guide `2560fe526d8736260e6100d21f953519c43c203f`. No deployment or new automation was created.
 
 ## Validation on 2026-10-04
 
@@ -60,6 +78,6 @@ The combined job is red because its separate PH271 dependency-installation step 
 
 - The destination unique index must exist. The adapter waits for model initialization when Mongoose manages indexes; installations with `autoIndex` disabled must provision it before draining.
 - Older unfenced workers must finish or stop before relying on token fencing. Legacy destination records without an acceptance ID cannot be retroactively deduplicated after a historical insert-before-ack interruption; inspect those states before rollout.
-- Lease expiry still requires a later drain invocation. The current caller starts a detached drain of at most five rows, and this PR does not introduce a periodic worker.
+- Lease expiry makes rows eligible for a later drain. The long-lived server now supplies a bounded recovery worker; serverless-only unlock hosting still needs that server process against the same outbox. Target deployment restart, HTTP shutdown and Mongo-operation timing remain unverified.
 - Backpressure remains count-then-insert; metrics remain process-local. Concurrent hash-chain serialization is outside the issue's stated scope.
 - These focused runs do not establish target deployment restart behavior, target index provisioning or full upstream CI. Maintainer acceptance remains pending. This remains the existing conditional-reward contribution; no new bounty claim or awarded-payment claim is made.
