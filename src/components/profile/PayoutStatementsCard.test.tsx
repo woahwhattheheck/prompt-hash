@@ -1,7 +1,8 @@
-import { screen, waitFor, within } from "@testing-library/react";
+// @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, render as renderWithProviders, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { renderWithProviders } from "@/test/render";
 import { PayoutStatementsCard } from "./PayoutStatementsCard";
 
 const wallet = "GCREATORTESTWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
@@ -72,6 +73,7 @@ describe("PayoutStatementsCard", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -196,5 +198,105 @@ describe("PayoutStatementsCard", () => {
     } else {
       expect(row.queryByText(/carryover to next period:/i)).toBeNull();
     }
+  });
+});
+
+
+describe("PayoutStatementsCard wallet isolation", () => {
+  const otherWallet = "GOTHERTESTWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+  function statement(statementId: string, sellerWallet: string) {
+    return {
+      statementId, sellerWallet, payoutAddress: sellerWallet,
+      period: { start: "2026-01-01T00:00:00.000Z", end: "2026-01-31T23:59:59.999Z" },
+      feeBps: 500, grossStroops: 100_000_000, platformFeeStroops: 5_000_000,
+      refundSellerDebitStroops: 0, clawbackStroops: 0,
+      previousBalanceCarryoverStroops: 0, netSettlementStroops: 95_000_000,
+      payableStroops: 95_000_000, closingBalanceCarryoverStroops: 0,
+      status: "pending", generatedAt: "2026-02-01T00:00:00.000Z",
+    };
+  }
+
+  function deferredResponse() {
+    let resolve!: (response: Response) => void;
+    const promise = new Promise<Response>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("clears the previous wallet's saved rows and preview immediately", async () => {
+    const next = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(otherWallet)) return next.promise;
+      return url.includes("from=")
+        ? Response.json({ statement: statement("preview_a", wallet) })
+        : Response.json({ statements: [statement("saved_a", wallet)] });
+    }));
+    const user = userEvent.setup();
+    const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+    await screen.findByText("saved_a");
+    await user.click(screen.getByRole("button", { name: /preview period/i }));
+    await screen.findByText("preview_a");
+    view.rerender(<PayoutStatementsCard walletAddress={otherWallet} />);
+    expect(screen.queryByText("saved_a")).not.toBeInTheDocument();
+    expect(screen.queryByText("preview_a")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save statement/i })).not.toBeInTheDocument();
+    await act(async () => {
+      next.resolve(Response.json({ statements: [statement("saved_b", otherWallet)] }));
+    });
+    await screen.findByText("saved_b");
+  });
+
+  it("ignores a saved-list response from a previous wallet generation", async () => {
+    const previous = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      return String(input).includes(otherWallet)
+        ? Response.json({ statements: [statement("saved_b", otherWallet)] })
+        : previous.promise;
+    }));
+    const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+    view.rerender(<PayoutStatementsCard walletAddress={otherWallet} />);
+    await screen.findByText("saved_b");
+    await act(async () => {
+      previous.resolve(Response.json({ statements: [statement("late_saved_a", wallet)] }));
+    });
+    expect(screen.getByText("saved_b")).toBeInTheDocument();
+    expect(screen.queryByText("late_saved_a")).not.toBeInTheDocument();
+  });
+
+  it("ignores a preview response that finishes after a wallet switch", async () => {
+    const previous = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      return String(input).includes("from=")
+        ? previous.promise
+        : Response.json({ statements: [] });
+    }));
+    const user = userEvent.setup();
+    const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /preview period/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /preview period/i }));
+    view.rerender(<PayoutStatementsCard walletAddress={otherWallet} />);
+    await act(async () => {
+      previous.resolve(Response.json({ statement: statement("late_preview_a", wallet) }));
+    });
+    expect(screen.queryByText("late_preview_a")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save statement/i })).not.toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
+  it("clears financial data on disconnect without requesting an empty wallet", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ statements: [statement("saved_a", wallet)] })));
+    const view = renderWithProviders(<PayoutStatementsCard walletAddress={wallet} />);
+    await screen.findByText("saved_a");
+    const requestsBefore = vi.mocked(fetch).mock.calls.length;
+    view.rerender(<PayoutStatementsCard walletAddress="" />);
+    expect(screen.queryByText("saved_a")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /preview period/i })).toBeDisabled();
+    expect(vi.mocked(fetch).mock.calls.length).toBe(requestsBefore);
   });
 });

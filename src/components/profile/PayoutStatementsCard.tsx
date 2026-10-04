@@ -95,6 +95,16 @@ function defaultMonthRange(): { from: string; to: string } {
 export function PayoutStatementsCard({
   walletAddress,
 }: PayoutStatementsCardProps) {
+  // A wallet change must discard both visible data and pending responses
+  // from the previous wallet's component generation.
+  return (
+    <WalletPayoutStatementsCard key={walletAddress} walletAddress={walletAddress} />
+  );
+}
+
+function WalletPayoutStatementsCard({
+  walletAddress,
+}: PayoutStatementsCardProps) {
   const initialRange = useMemo(() => defaultMonthRange(), []);
   const [from, setFrom] = useState(initialRange.from.slice(0, 10));
   const [to, setTo] = useState(initialRange.to.slice(0, 10));
