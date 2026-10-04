@@ -1,0 +1,34 @@
+name: Payout statement CSV text boundary
+on:
+  push:
+    branches: [validation/quarry-ph277-csv-20261004]
+permissions:
+  contents: write
+concurrency:
+  group: quarry-ph277-csv-7c45877b
+  cancel-in-progress: false
+jobs:
+  exporter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: 7c45877bd7c849a8b94356c2d692845a7d654c91
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - name: Repair and execute the existing payout suite
+        run: python control/repair.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ph277-csv-evidence
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error
