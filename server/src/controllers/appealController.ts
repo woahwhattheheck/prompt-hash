@@ -2,6 +2,9 @@ import { Request, Response } from "express";
 import { createHash } from "crypto";
 import Appeal from "../models/Appeal";
 import Prompt from "../models/Prompt";
+import { ADMIN_ROLE, AdminAuthError, authorizeAdminPrincipal } from "../auth/adminPrincipal";
+
+export const APPEAL_REVIEW_AUDIENCE = "prompt-hash:appeal-review";
 
 export async function createAppeal(req: Request, res: Response) {
   try {
@@ -75,7 +78,13 @@ export async function listAppeals(req: Request, res: Response) {
 
 export async function updateAppealStatus(req: Request, res: Response) {
   try {
-    const { status, creatorResponse, reasonCode, reviewerDecision } = req.body;
+    // Status and reviewer history are moderation writes. Public appeal filing
+    // remains on POST /appeals; a body field cannot grant review authority.
+    const principal = authorizeAdminPrincipal(req.get("authorization"), {
+      expectedAud: APPEAL_REVIEW_AUDIENCE,
+      requiredRoles: [ADMIN_ROLE],
+    });
+    const { status, creatorResponse, reasonCode, reviewerDecision } = req.body ?? {};
     const validStatuses = ["flagged", "notified", "responded", "reviewed", "upheld", "rejected", "appealed"];
     if (status && !validStatuses.includes(status)) {
       return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` });
@@ -90,7 +99,9 @@ export async function updateAppealStatus(req: Request, res: Response) {
     }
     if (reasonCode) update.reasonCode = reasonCode;
     if (reviewerDecision) {
-      mutation.$push = { reviewerDecisions: { ...reviewerDecision, decidedAt: new Date() } };
+      mutation.$push = {
+        reviewerDecisions: { ...reviewerDecision, reviewerAddress: principal.sub, decidedAt: new Date() },
+      };
       update.status = status || "reviewed";
       update.reviewedAt = new Date();
     }
@@ -119,6 +130,9 @@ export async function updateAppealStatus(req: Request, res: Response) {
     }
     return res.json(appeal);
   } catch (err) {
+    if (err instanceof AdminAuthError) {
+      return res.status(err.code === "forbidden" ? 403 : 401).json({ error: err.message, code: err.code });
+    }
     const message = err instanceof Error ? err.message : "Internal error";
     return res.status(500).json({ error: message });
   }

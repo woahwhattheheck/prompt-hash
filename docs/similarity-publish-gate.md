@@ -17,7 +17,8 @@ The current `/sell` form checks the draft against indexed prompts and maps the s
 - `POST /api/fingerprint/publish-check` — body `{ title, content, excludeOnChainId? }` → `{ decision, score, similarTo, flag, feedback }`
 - `POST /api/fingerprint/scan` — administrator-only rescan of an existing indexed prompt; body `{ promptId, text }` requires non-empty strings. This endpoint persists moderation evidence.
 - `POST /api/fingerprint/override` — authenticated maintainer override; body `{ promptId, newDecision, reason, appealId? }`, response `{ override, result, replayed, appealSync? }`
-- Appeals remain on `/api/appeals*` for creator false-positive requests
+- `POST /api/appeals` — public filing of a creator false-positive request; existing read routes remain public
+- `PATCH /api/appeals/:id` — authenticated administrator status/review mutation using audience `prompt-hash:appeal-review`
 
 ## Creator feedback
 
@@ -75,11 +76,27 @@ A successful HTTP response means the Prompt decision and its audit are committed
 
 An exact replay of the latest stored override returns `replayed: true` and can retry only the appeal copy, without another Prompt decision update or audit append. A different actor, reason, or intervening scan cannot use that replay. The stored appeal preconditions are retained in the required audit for recovery. This route does not change the authority or behavior of other appeal endpoints.
 
+### Appeal moderation authorization
+
+`PATCH /api/appeals/:id` requires the existing signed principal with the `admin` role and audience `prompt-hash:appeal-review`. Authentication runs before input validation or any Appeal lookup/update. Missing or incorrectly scoped credentials receive 401; a verified principal with only `report_reviewer` receives 403. A similarity-override credential cannot authorize this separate mutation. The signing secret and administrator credentials stay server-side under the existing operator issuer and revocation mechanism.
+
+This handler can change final status and append review history, so every PATCH field, including a stored `creatorResponse`, uses this moderation gate. Public `POST /api/appeals` filing and the read routes are unchanged. The current frontend has no appeal PATCH or creator-response client; the original issue design specifies public POST filing and maintainer decisions. This change does not introduce a wallet-authenticated creator response workflow or grant review authority to a caller-supplied address, role, or response field.
+
+New `reviewerDecisions` entries use the exact verified principal `sub` as `reviewerAddress`, including case, and a server timestamp. Caller-supplied reviewer identity and timestamp cannot replace those values. Previous entries remain intact, and the history append still shares one update with status and timestamps. This appeal record does not replace or change the separate audited Prompt override or authorize on-chain publication.
+
+The focused anonymous-review regression against parent `51c458e99832e30c69655bcde70c9005b0614edc` received HTTP 200 instead of 401. With this repair, the maintained selection passed **7 cases**, with **5 unrelated cases unselected** (351 ms tests; 929 ms Vitest duration). It exercises the registered Express router, real principal verification, rejection before model access, public appeal filing, and a successful authenticated review with exact verified attribution. The successful review uses the real Appeal schema/query casting/update validators and replaces only the MongoDB collection call with the existing in-memory adapter. Other controller cases retain the existing mocked model boundary. No live MongoDB, deployed service, wallet, contract, broad-suite, or performance result is implied.
+
+Execution used Node 24.19.0, Vitest 4.1.10, Express 5.2.1, Supertest 7.2.2 and Mongoose 9.9.2 from existing installed dependencies. The maintained appeal file is now included in the existing similarity configuration. Reproduce this focused selection:
+
+```bash
+node node_modules/vitest/vitest.mjs run --config vitest.similarity.config.mjs src/test/appeal.test.ts -t 'updateAppealStatus|creates an appeal with valid fields' --reporter=dot
+```
+
 ### Appeal status history
 
-The existing appeal status handler keeps the `reviewerDecisions` history append beside the status/timestamp `$set` in one database update. A new review retains earlier entries and appends the server-timestamped decision with `$push`. This history is separate from the authenticated Prompt override audit above; the endpoint's existing authority and the on-chain listing boundary are unchanged.
+The existing appeal status handler keeps the `reviewerDecisions` history append beside the status/timestamp `$set` in one database update. A new review retains earlier entries and appends the server-timestamped decision with `$push`. This history is separate from the authenticated Prompt override audit above. The moderation authorization described above now protects the handler; the on-chain listing boundary is unchanged.
 
-The focused regression runs the real Appeal schema, query casting and update validators, replacing only the collection call with an adapter that applies the resulting operators. On the original handler, Mongoose 9.9.2 rejected the nested operator with `Invalid update: Unexpected modifier "$push" as a key in operator "$set"`, which the controller returned as a 500 error. The repaired handler returned the reviewed record with both the previous and newly appended entries in one update. The `updateAppealStatus` selection passed three cases, with six unrelated cases skipped, in 663 ms on Node 24.19.0/Vitest 5.0.1.
+The earlier history regression at `447f6069a5b0682784a61e1a1285304cdbaf0486` ran the real Appeal schema, query casting and update validators, replacing only the collection call with an adapter that applies the resulting operators. On the original handler, Mongoose 9.9.2 rejected the nested operator with `Invalid update: Unexpected modifier "$push" as a key in operator "$set"`, which the controller returned as a 500 error. The repaired handler returned the reviewed record with both the previous and newly appended entries in one update. The `updateAppealStatus` selection passed three cases, with six unrelated cases skipped, in 663 ms on Node 24.19.0/Vitest 5.0.1.
 
 The local cached Mongoose client was 9.9.2, within the declared `^9.5.0` range; `server/package-lock.json` pins 9.5.0, which was not rerun. Dependency files are unchanged. This checks controller and Mongoose behavior with a collection adapter, not a live MongoDB write or HTTP deployment.
 
@@ -107,6 +124,7 @@ These are deterministic scaled sample workloads, not a deployed catalog or an en
 - `src/pages/sell/CreatePromptForm.tsx` — pre-submit gate
 - `src/test/similarityDetection.test.ts` — allow / review / block / override algorithm coverage
 - `src/test/similarityOverride.test.ts` — actual Express route, authentication, Mongoose update validation, races, and recovery
+- `src/test/appeal.test.ts` — appeal filing, moderation authorization, verified review attribution and retained history
 
 ## Tests
 
