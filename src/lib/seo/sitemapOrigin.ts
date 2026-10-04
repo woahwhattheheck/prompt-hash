@@ -204,13 +204,18 @@ export function buildSitemapXml(input: BuildSitemapXmlInput): string {
     input.lastmod ?? new Date().toISOString().split("T")[0]!;
   const home = buildSitemapLoc(input.origin);
   const browse = buildSitemapLoc(input.origin, ["browse"]);
+  let numericPromptPrefix: string | undefined;
 
   const promptUrls = input.prompts
     .filter((prompt) => Boolean(prompt.active))
     .map((prompt) => {
       const id =
         typeof prompt.id === "bigint" ? prompt.id.toString() : prompt.id;
-      const loc = buildSitemapLoc(input.origin, ["prompts", id]);
+      // Decimal contract IDs cannot introduce URL or XML syntax. Resolve and
+      // escape their shared prefix once; arbitrary IDs retain the full path.
+      const loc = typeof id === "string" && id.length > 0 && !/[^0-9]/.test(id)
+        ? (numericPromptPrefix ??= buildSitemapLoc(input.origin, ["prompts", ""])) + id
+        : buildSitemapLoc(input.origin, ["prompts", id]);
       return `
   <url>
     <loc>${loc}</loc>
