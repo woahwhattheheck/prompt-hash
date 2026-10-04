@@ -10,6 +10,7 @@ export default defineConfig({
     globals: true,
     include: [
       "src/lib/notifications/sellerNotificationCursor.test.ts",
+      "src/lib/notifications/sellerNotificationStore.test.ts",
       "src/lib/notifications/sellerNotifications.test.ts",
     ],
   },

@@ -1,8 +1,8 @@
 /**
  * Durable seller-notification store (#181).
  *
- * File-backed by default; optional Mongo when MONGODB_URI is set via the
- * server model. Tests inject an in-memory repository.
+ * File-backed without MONGODB_URI; a configured Mongo backend must initialize
+ * successfully. Tests can inject an in-memory repository.
  */
 
 import os from "os";
@@ -68,19 +68,16 @@ export function defaultSellerNotificationStorePath(): string {
 
 async function buildDefaultRepository(): Promise<SellerNotificationRepository> {
   if (process.env.MONGODB_URI) {
-    try {
-      const [{ default: connectDb }, modelModule] = await Promise.all([
-        import("../../../server/src/db/connectDb"),
-        import("../../../server/src/models/SellerNotificationState"),
-      ]);
-      await connectDb();
-      const { createMongoSellerNotificationRepository } = await import(
-        "./mongoSellerNotificationRepository"
-      );
-      return createMongoSellerNotificationRepository(modelModule as never);
-    } catch {
-      // Fall through to file store when server model is unavailable (frontend-only).
-    }
+    // A configured durable backend must not silently become local file state.
+    const [{ default: connectDb }, modelModule] = await Promise.all([
+      import("../../../server/src/db/connectDb"),
+      import("../../../server/src/models/SellerNotificationState"),
+    ]);
+    await connectDb();
+    const { createMongoSellerNotificationRepository } = await import(
+      "./mongoSellerNotificationRepository"
+    );
+    return createMongoSellerNotificationRepository(modelModule as never);
   }
   return createFileSellerNotificationRepository(defaultSellerNotificationStorePath());
 }
@@ -88,7 +85,12 @@ async function buildDefaultRepository(): Promise<SellerNotificationRepository> {
 export async function getSellerNotificationRepository(): Promise<SellerNotificationRepository> {
   if (configured) return configured;
   if (!defaultPromise) {
-    defaultPromise = buildDefaultRepository();
+    const pending = buildDefaultRepository().catch((error) => {
+      // Retry failures without discarding a newer configure/reset selection.
+      if (defaultPromise === pending) defaultPromise = null;
+      throw error;
+    });
+    defaultPromise = pending;
   }
   return defaultPromise;
 }
