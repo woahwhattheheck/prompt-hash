@@ -72,3 +72,58 @@ events with wallet **hashes** only (no plaintext, no tokens).
 ## Non-goals
 
 Changing version entitlement / buyer unlock rules.
+
+## Unpublished content through version reads (2026-10-04)
+
+Both version GET handlers also check the prompt's listing state before reading
+a version body. A prompt in `draft` or `ready` returns `404 Prompt not found.`
+and never serializes either a version body or the prompt-content fallback.
+Creators continue using the signed owned/draft routes for private content.
+
+The check reorders the existing prompt lookup; it adds no database read. The
+existing buyer/purchase rules, archived purchases, published version selection,
+and legacy records without a listing state remain as before. The separate
+adapter-consolidation contribution in #275 owns buyer authentication and the
+shared-domain migration; this correction is the creator-privacy boundary on
+the two handlers in this branch.
+
+### Executed source and results
+
+A bounded Node.js 24.19.0 replay executed each complete TypeScript module after
+native type stripping. VM module linking supplied explicit database/model
+fixtures and an identity observability wrapper; no handler body was extracted
+or reimplemented. The request/response objects were recording collaborators.
+
+| Scenario, in each handler | Before | After |
+| --- | --- | --- |
+| Draft with stored version | 200, private version returned | 404, zero version reads |
+| Draft with prompt fallback | 200, draft plaintext returned | 404, zero version reads |
+| Ready with stored version | 200, private version returned | 404, zero version reads |
+| Published with stored version | Entitled version returned | Same content |
+| Archived with stored version | Entitled version returned | Same content |
+| Legacy record without listing state | Existing prompt fallback | Same content |
+
+The serverless draft scenarios used no purchase record and an arbitrary
+synthetic buyer value. Express scenarios retained its required purchase
+fixture. Both handlers made exactly one prompt lookup in every scenario.
+Baseline: 6 passing controls and 6 failing privacy cases. Candidate: 12/12
+passing; all six private cases returned no content.
+
+| Module | Before blob | Executed candidate blob |
+| --- | --- | --- |
+| `api/prompts/version.ts` | `a6b26ce88ed6029c201376ad9b7bc0a4efd1ace6` | `8af2df7ae7d40e16b9ac220b1cc57df72a2fc18d` |
+| `server/src/controllers/versioningControllers.ts` | `6224309e18fca480278df255d121323c54236f7b` | `698a04ce3fcf7052aee3b09fdd215427ac94b4c7` |
+
+The same six scenarios per adapter are maintained in the existing
+`server/src/routes/creatorPrivacyRoutes.test.ts` with Express/Supertest and
+explicit model fixtures. The focused maintained command is:
+
+```sh
+npm --prefix server test -- src/routes/creatorPrivacyRoutes.test.ts --runInBand
+```
+
+That Jest command was not executed in this environment because its dependencies
+were unavailable. The executed result above is the direct complete-handler
+replay, not a MongoDB integration, real HTTP/hosting, full-suite, lint/build or
+hosted-CI result. Earlier creator-session evidence remains tied to its prior
+source and is not counted in these 12 cases.

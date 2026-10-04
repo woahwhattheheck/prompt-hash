@@ -19,6 +19,10 @@ const NETWORK = "Test SDF Network ; September 2015";
 const CONTENT = "version body bound by digest";
 const PROMPT_ID = "507f1f77bcf86cd799439011";
 
+jest.mock("../../../src/lib/observability/wrapper", () => ({
+  withObservability: (handler: unknown) => handler,
+}));
+
 jest.mock("../db/connectDb", () => jest.fn().mockResolvedValue(undefined));
 
 jest.mock("../models/User", () => ({
@@ -88,6 +92,8 @@ jest.mock("../config/stellar", () => ({
 import User from "../models/User";
 import Prompt from "../models/Prompt";
 import PromptVersion from "../models/PromptVersion";
+import Purchase from "../models/Purchase";
+import serverlessVersionHandler from "../../../api/prompts/version";
 import { publishPromptVersion } from "../services/promptVersioning";
 import { promptRouter } from "./promptRoutes";
 import { versioningRouter } from "./versioningRoutes";
@@ -100,6 +106,9 @@ const mockPublish = publishPromptVersion as jest.Mock;
 function buildApp() {
   const app = express();
   app.use(express.json());
+  app.get("/api/serverless/prompts/version", async (req, res) => {
+    await serverlessVersionHandler(req as any, res as any);
+  });
   app.use("/api/prompts", promptRouter);
   app.use("/api/versions", versioningRouter);
   return app;
@@ -472,5 +481,49 @@ describe("creator-session expiry", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+});
+
+describe.each([
+  ["serverless", "/api/serverless/prompts/version"],
+  ["Express", "/api/versions/buyer-version"],
+])("%s version read — unpublished creator content", (adapter, endpoint) => {
+  it.each([
+    { name: "draft version", listingStatus: "draft", version: "PRIVATE VERSION", status: 404 },
+    { name: "draft fallback", listingStatus: "draft", version: null, status: 404 },
+    { name: "ready version", listingStatus: "ready", version: "PRIVATE VERSION", status: 404 },
+    { name: "published version", listingStatus: "published", version: "ENTITLED VERSION", status: 200 },
+    { name: "archived version", listingStatus: "archived", version: "ENTITLED VERSION", status: 200 },
+    { name: "legacy fallback", listingStatus: undefined, version: null, status: 200 },
+  ])("$name", async ({ listingStatus, version, status }) => {
+    (Purchase.findOne as jest.Mock).mockResolvedValue(
+      adapter === "serverless" && listingStatus === "draft"
+        ? null
+        : { versionIndex: 1, createdAt: "2026-10-04T00:00:00.000Z" },
+    );
+    (Prompt.findById as jest.Mock).mockReturnValue({
+      lean: jest.fn().mockResolvedValue({
+        _id: PROMPT_ID,
+        listingStatus,
+        content: listingStatus === undefined ? "LEGACY CONTENT" : "PRIVATE DRAFT",
+      }),
+    });
+    (PromptVersion.findOne as jest.Mock).mockResolvedValue(
+      version === null ? null : { content: version, changeNote: "fixture" },
+    );
+
+    const res = await request(buildApp())
+      .get(endpoint)
+      .query({ promptId: PROMPT_ID, buyerWallet: "synthetic-buyer" });
+
+    expect(res.status).toBe(status);
+    if (status === 404) {
+      expect(res.body).toEqual({ error: "Prompt not found." });
+      expect(PromptVersion.findOne).not.toHaveBeenCalled();
+    } else {
+      expect(res.body.content).toBe(version ?? "LEGACY CONTENT");
+      expect(PromptVersion.findOne).toHaveBeenCalledTimes(1);
+    }
+    expect(Prompt.findById).toHaveBeenCalledTimes(1);
   });
 });

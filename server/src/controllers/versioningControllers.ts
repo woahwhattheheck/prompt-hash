@@ -141,12 +141,17 @@ export const GetBuyerVersion = async (req: Request, res: Response): Promise<Resp
       return res.status(404).json({ error: "No purchase record found." });
     }
 
+    // Unpublished creator content must not escape through public version reads.
+    const prompt = await Prompt.findById(promptId).lean();
+    const listingStatus = (prompt as any)?.listingStatus;
+    if (listingStatus === "draft" || listingStatus === "ready") {
+      return res.status(404).json({ error: "Prompt not found." });
+    }
+
     const version = await PromptVersion.findOne({
       promptId: String(promptId),
       versionIndex: purchase.versionIndex,
     });
-
-    const prompt = await Prompt.findById(promptId).lean();
 
     return res.json({
       versionIndex: purchase.versionIndex,

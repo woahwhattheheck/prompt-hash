@@ -20,6 +20,14 @@ async function handler(req: any, res: any) {
       return;
     }
 
+    // Unpublished creator content must not escape through public version reads.
+    const prompt = await Prompt.findById(promptId).lean();
+    const listingStatus = (prompt as any)?.listingStatus;
+    if (listingStatus === "draft" || listingStatus === "ready") {
+      res.status(404).json({ error: "Prompt not found." });
+      return;
+    }
+
     const purchase = await Purchase.findOne({
       promptId: String(promptId),
       buyerWallet: String(buyerWallet).toLowerCase(),
@@ -32,8 +40,6 @@ async function handler(req: any, res: any) {
       promptId: String(promptId),
       versionIndex,
     });
-
-    const prompt = await Prompt.findById(promptId).lean();
 
     res.status(200).json({
       versionIndex,
