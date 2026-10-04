@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { PromptRecord } from "../stellar/promptHashClient";
 import {
   buildSitemapLoc,
   buildSitemapXml,
@@ -220,6 +221,24 @@ describe("buildSitemapLoc / buildSitemapXml", () => {
       "https://prompthash.io/prompts/id%3C%22%26%3E",
     );
     expect(loc).not.toMatch(/[<>"']/);
+  });
+
+  it("accepts client records without losing bigint prompt ID precision", () => {
+    const prompts: Pick<PromptRecord, "id" | "active">[] = [
+      { id: 9007199254740993n, active: true },
+      { id: 9007199254740995n, active: false },
+    ];
+    const xml = buildSitemapXml({
+      origin: "https://prompthash.io",
+      lastmod: "2026-09-24",
+      prompts,
+    });
+
+    expect(xml).toContain(
+      "<loc>https://prompthash.io/prompts/9007199254740993</loc>",
+    );
+    expect(xml).not.toContain("9007199254740992");
+    expect(xml).not.toContain("9007199254740995");
   });
 
   it("renders sitemap XML with only the configured origin", () => {

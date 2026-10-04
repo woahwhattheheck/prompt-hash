@@ -186,7 +186,8 @@ export function buildSitemapLoc(
 }
 
 export type SitemapPromptEntry = {
-  id: string;
+  /** Match client bigint IDs while retaining string-based callers. */
+  id: string | bigint;
   active?: boolean;
 };
 
@@ -207,7 +208,9 @@ export function buildSitemapXml(input: BuildSitemapXmlInput): string {
   const promptUrls = input.prompts
     .filter((prompt) => Boolean(prompt.active))
     .map((prompt) => {
-      const loc = buildSitemapLoc(input.origin, ["prompts", prompt.id]);
+      const id =
+        typeof prompt.id === "bigint" ? prompt.id.toString() : prompt.id;
+      const loc = buildSitemapLoc(input.origin, ["prompts", id]);
       return `
   <url>
     <loc>${loc}</loc>
