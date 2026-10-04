@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { xlmToStroops } from "@/lib/stellar/format";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
 import { xlmBoundToStroops, sortPromptsBy } from "@/lib/prompts/promptOrdering";
 
@@ -22,6 +23,18 @@ interface SearchResponse {
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+
+/** Preserve exact plain-decimal API prices before any Number conversion. */
+function indexedPriceToStroops(price: unknown): bigint {
+  if (
+    typeof price === "string" &&
+    /^[+-]?(?:\d+(?:\.\d{0,7})?|\.\d{1,7})$/u.test(price.trim())
+  ) {
+    return xlmToStroops(price);
+  }
+  // Retain the existing rounding/coercion for numeric and legacy API values.
+  return xlmBoundToStroops(Number(price || 0));
+}
 
 /**
  * Hook to search prompts using the indexed search API
@@ -71,7 +84,7 @@ export function useSearchPrompts(filters: SearchFilters, enabled = true) {
           (p: any) => ({
             id: BigInt(p.onChainId || p._id),
             creator: p.owner?.walletAddress || p.creator || "Unknown",
-            priceStroops: xlmBoundToStroops(Number(p.price || 0)),
+            priceStroops: indexedPriceToStroops(p.price),
             title: p.title,
             category: p.category,
             previewText: p.content?.slice(0, 200) || "",
@@ -238,7 +251,7 @@ export function useFeaturedPrompts(limit: number = 6) {
         return data.map((p: any) => ({
           id: BigInt(p.onChainId || p._id),
           creator: p.owner?.walletAddress || p.creator || "Unknown",
-          priceStroops: xlmBoundToStroops(Number(p.price || 0)),
+          priceStroops: indexedPriceToStroops(p.price),
           title: p.title,
           category: p.category,
           previewText: p.content?.slice(0, 200) || "",
