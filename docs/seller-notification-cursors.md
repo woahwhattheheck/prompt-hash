@@ -55,6 +55,18 @@ boundary; the file merge runs under its existing lock. Mongo uses
 in the cursor update. Read IDs represent set membership; feed ordering and
 cursor metadata retain their existing behavior.
 
+## Wallet changes in the browser
+
+The hook owns its local notifications and unread count by wallet address. A
+wallet switch or disconnect hides the previous wallet's values immediately,
+including the render before effects run. A feed waiting on the network carries
+the address that started its request; a late result cannot be installed as
+another wallet's local state. While the selected wallet has no matching feed,
+the displayed notification list and unread badge are empty.
+
+Mark-all-read and local dismiss operate on the selected wallet. Their existing
+server acknowledgement and next-poll reconciliation behavior is retained.
+
 ## Guarantees
 
 - Events are neither lost nor duplicated across devices and restarts.
@@ -77,3 +89,19 @@ Covers missed polls, storage clearing / cursor recovery, two devices, duplicate
 events, reorg/correction, file-store restart, incompatible-file preservation,
 recovery after restoring a compatible file, concurrent acknowledgements, and
 stale cursor advances that preserve read state until an explicit clear.
+
+The existing `sellerNotifications.test.ts` also mounts the hook to exercise a
+wallet switch while the next feed is loading, a late response from the old
+wallet, mark-all-read, dismiss and disconnect. Wallet, query and notification
+client boundaries are controlled; React effects and rendering are real.
+
+A local candidate run completed seven cases (the six existing helper cases and
+one mounted interaction case) before the command runner became unavailable.
+The final hook and test were reconstructed from retained source after that
+outage. The seven-pass observation applies to the earlier local candidate;
+the reconstructed files have not been re-executed or checked with the formatter
+or linter. The intended comparison against the previous hook did not start.
+The local run used Node 24.19.0, Vitest 4.1.10, React 18.3.1, Testing Library
+16.3.2 and jsdom 29.1.1 from retained dependencies, with a focused resolver
+configuration. This was not a complete dependency installation, provider
+integration, live-wallet run or full application build.

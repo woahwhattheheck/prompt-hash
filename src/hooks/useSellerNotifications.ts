@@ -25,8 +25,16 @@ export interface UseSellerNotifications {
 
 export function useSellerNotifications(): UseSellerNotifications {
   const { address } = useWallet();
-  const [notifications, setNotifications] = useState<SellerNotification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [localFeed, setLocalFeed] = useState<{
+    wallet: typeof address;
+    notifications: SellerNotification[];
+    unreadCount: number;
+  }>({ wallet: address, notifications: [], unreadCount: 0 });
+
+  // Hide the previous wallet's feed on the first render after a switch.
+  const notifications =
+    localFeed.wallet === address ? localFeed.notifications : [];
+  const unreadCount = localFeed.wallet === address ? localFeed.unreadCount : 0;
 
   const { data: prompts = [] } = useQuery({
     queryKey: ["created-prompts", address],
@@ -40,11 +48,18 @@ export function useSellerNotifications(): UseSellerNotifications {
     queryKey: ["seller-notifications", address],
     queryFn: async () => {
       if (!address) {
-        return { notifications: [], unreadCount: 0, cursorEventId: null, lastLedger: 0 };
+        return {
+          wallet: address,
+          notifications: [],
+          unreadCount: 0,
+          cursorEventId: null,
+          lastLedger: 0,
+        };
       }
       // Drop legacy snapshot keys once we are on the cursor path.
       clearLegacyLocalNotificationState(address);
-      return fetchSellerNotificationFeed(address, { advance: true });
+      const result = await fetchSellerNotificationFeed(address, { advance: true });
+      return { ...result, wallet: address };
     },
     enabled: Boolean(address),
     refetchInterval: 60_000,
@@ -52,22 +67,29 @@ export function useSellerNotifications(): UseSellerNotifications {
   });
 
   useEffect(() => {
-    if (!address) {
-      setNotifications([]);
-      setUnreadCount(0);
+    if (!address || !feed || feed.wallet !== address) {
+      setLocalFeed({ wallet: address, notifications: [], unreadCount: 0 });
       return;
     }
-    if (!feed) return;
-    setNotifications(feed.notifications ?? []);
-    setUnreadCount(feed.unreadCount ?? 0);
+    setLocalFeed({
+      wallet: address,
+      notifications: feed.notifications ?? [],
+      unreadCount: feed.unreadCount ?? 0,
+    });
   }, [address, feed]);
 
   const summary = useMemo(() => summariseActivity(prompts), [prompts]);
 
   const markAllRead = useCallback(() => {
     if (!address) return;
-    setNotifications((current) => current.map((n) => ({ ...n, read: true })));
-    setUnreadCount(0);
+    setLocalFeed((current) => ({
+      wallet: address,
+      notifications:
+        current.wallet === address
+          ? current.notifications.map((n) => ({ ...n, read: true }))
+          : [],
+      unreadCount: 0,
+    }));
     void postSellerNotificationAction(address, "mark-all-read").catch(() => {
       /* best-effort; next poll reconciles */
     });
@@ -77,8 +99,7 @@ export function useSellerNotifications(): UseSellerNotifications {
     if (!address) return;
     // Clear is a local UI dismiss; read-set stays server-side so other devices
     // still see history. Mark all read so unread badge stays consistent.
-    setNotifications([]);
-    setUnreadCount(0);
+    setLocalFeed({ wallet: address, notifications: [], unreadCount: 0 });
     void postSellerNotificationAction(address, "mark-all-read").catch(() => {
       /* best-effort */
     });
