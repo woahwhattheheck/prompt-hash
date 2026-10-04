@@ -56,6 +56,14 @@ A successful HTTP response means the Prompt decision and its audit are committed
 
 An exact replay of the latest stored override returns `replayed: true` and can retry only the appeal copy, without another Prompt decision update or audit append. A different actor, reason, or intervening scan cannot use that replay. The stored appeal preconditions are retained in the required audit for recovery. This route does not change the authority or behavior of other appeal endpoints.
 
+### Appeal status history
+
+The existing appeal status handler keeps the `reviewerDecisions` history append beside the status/timestamp `$set` in one database update. A new review retains earlier entries and appends the server-timestamped decision with `$push`. This history is separate from the authenticated Prompt override audit above; the endpoint's existing authority and the on-chain listing boundary are unchanged.
+
+The focused regression runs the real Appeal schema, query casting and update validators, replacing only the collection call with an adapter that applies the resulting operators. On the original handler, Mongoose 9.9.2 rejected the nested operator with `Invalid update: Unexpected modifier "$push" as a key in operator "$set"`, which the controller returned as a 500 error. The repaired handler returned the reviewed record with both the previous and newly appended entries in one update. The `updateAppealStatus` selection passed three cases, with six unrelated cases skipped, in 663 ms on Node 24.19.0/Vitest 5.0.1.
+
+The local cached Mongoose client was 9.9.2, within the declared `^9.5.0` range; `server/package-lock.json` pins 9.5.0, which was not rerun. Dependency files are unchanged. This checks controller and Mongoose behavior with a collection adapter, not a live MongoDB write or HTTP deployment.
+
 ## Scoring cost
 
 Each scan now prepares the unchanged draft once and reuses its term-frequency vector across candidates. The vector is built lazily: when either normalized text is shorter than 50 characters, the existing Levenshtein calculation is still used. Candidate normalization, Unicode tokenization, cosine arithmetic, thresholds and first-match tie selection are unchanged. The cache belongs to one scan and is never shared between requests.

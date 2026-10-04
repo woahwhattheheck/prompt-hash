@@ -102,6 +102,68 @@ describe("updateAppealStatus", () => {
     expect(res.json).toHaveBeenCalledWith(updated);
   });
 
+  it("appends a review decision while retaining prior history and advancing status", async () => {
+    const previousDecision = {
+      reviewerAddress: "GPRIOR",
+      decision: "upheld",
+      reasonCode: "original-review",
+    };
+    const incomingDecision = {
+      reviewerAddress: "GNEXT",
+      decision: "rejected",
+      reasonCode: "false-positive",
+      evidenceHash: "review-evidence",
+      decisionVersion: 2,
+      conflictOfInterest: false,
+    };
+    const stored = {
+      _id: "507f1f77bcf86cd799439011",
+      status: "flagged",
+      reviewerDecisions: [previousDecision],
+    };
+
+    const { default: actualAppeal } = await vi.importActual<
+      typeof import("../../server/src/models/Appeal")
+    >("../../server/src/models/Appeal");
+    const originalCollectionUpdate = actualAppeal.collection.findOneAndUpdate;
+
+    try {
+      // Use the actual schema, query casting and validators. Replace only the
+      // collection call; a status-only write must not fabricate an audit entry.
+      actualAppeal.collection.findOneAndUpdate = async (_filter: any, mutation: any) => {
+        const next = { ...stored, ...mutation.$set };
+        if (mutation.$push?.reviewerDecisions) {
+          next.reviewerDecisions = [
+            ...stored.reviewerDecisions,
+            mutation.$push.reviewerDecisions,
+          ];
+        }
+        return next;
+      };
+      (Appeal.findByIdAndUpdate as any).mockImplementationOnce(
+        (...args: any[]) => actualAppeal.findByIdAndUpdate(...args),
+      );
+      const res = mockRes();
+      await updateAppealStatus(
+        mockReq({ params: { id: stored._id }, body: { reviewerDecision: incomingDecision } }),
+        res,
+      );
+
+      expect(Appeal.findByIdAndUpdate).toHaveBeenCalledTimes(1);
+      const returned = res.json.mock.calls[0][0];
+      expect(returned.error).toBeUndefined();
+      expect(returned.status).toBe("reviewed");
+      expect(returned.reviewedAt).toBeInstanceOf(Date);
+      expect(returned.reviewerDecisions).toEqual([
+        previousDecision,
+        { ...incomingDecision, decidedAt: expect.any(Date) },
+      ]);
+      expect(stored.reviewerDecisions).toEqual([previousDecision]);
+    } finally {
+      actualAppeal.collection.findOneAndUpdate = originalCollectionUpdate;
+    }
+  });
+
   it("returns 404 for unknown id on update", async () => {
     (Appeal.findByIdAndUpdate as any).mockResolvedValue(null);
     const req = mockReq({
@@ -163,3 +225,4 @@ describe("getAppealStats", () => {
     );
   });
 });
+

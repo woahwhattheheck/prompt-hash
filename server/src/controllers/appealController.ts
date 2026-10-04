@@ -81,6 +81,7 @@ export async function updateAppealStatus(req: Request, res: Response) {
       return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` });
     }
     const update: Record<string, unknown> = {};
+    const mutation: Record<string, Record<string, unknown>> = { $set: update };
     if (status) update.status = status;
     if (creatorResponse) {
       update.creatorResponse = creatorResponse;
@@ -89,7 +90,7 @@ export async function updateAppealStatus(req: Request, res: Response) {
     }
     if (reasonCode) update.reasonCode = reasonCode;
     if (reviewerDecision) {
-      update.$push = { reviewerDecisions: { ...reviewerDecision, decidedAt: new Date() } };
+      mutation.$push = { reviewerDecisions: { ...reviewerDecision, decidedAt: new Date() } };
       update.status = status || "reviewed";
       update.reviewedAt = new Date();
     }
@@ -110,7 +111,7 @@ export async function updateAppealStatus(req: Request, res: Response) {
     }
     const appeal = await Appeal.findByIdAndUpdate(
       req.params.id,
-      { $set: update },
+      mutation,
       { new: true, runValidators: true },
     );
     if (!appeal) {
@@ -140,3 +141,4 @@ export async function getAppealStats(_req: Request, res: Response) {
     return res.status(500).json({ error: message });
   }
 }
+
