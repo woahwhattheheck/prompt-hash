@@ -69,14 +69,13 @@ Decoder entrypoint: `decodeEvent()` in `server/src/services/eventDecoder.ts`.
 | `SCHEMA_VALIDATION_FAILED` | Required field missing, null or nonprimitive      | Inspect producer / RPC decoding bugs                                |
 | `CORRUPT_PAYLOAD`          | Envelope not an object / bad `schemaVersion` type | Drop or repair upstream serialization                               |
 
-Required payload fields must normalize to strings. String spelling is preserved
-exactly, including case-sensitive Stellar account and contract StrKeys. Numbers,
-bigints and booleans retain their existing string conversion. An object or array
-in a required field is rejected with
-`SCHEMA_VALIDATION_FAILED`, rather than producing a successful event with a
-null required value. Missing or null required fields keep their existing
-missing-field diagnostic. Optional fields retain their prior projection,
-including null for values that cannot normalize to a primitive string.
+Required payload fields are checked against their contract-level primitive
+types. `prompt_id` and `price_stroops` keep their exact integer admission.
+Required `Address` fields (`creator`, `buyer`, and `asset`) must already be
+strings; numeric and boolean values are rejected instead of being converted to
+address text. String spelling remains unchanged and case-sensitive. Missing or
+null required fields keep their existing diagnostic. Optional fields retain
+their prior primitive projection behavior.
 
 In-process sink: `InMemoryEventDeadLetter` + `routeToDeadLetter()` in
 `server/src/services/eventDeadLetter.ts`. The routing helper logs synchronous
@@ -113,7 +112,7 @@ Address fields must not be lowercased: the Stellar StrKey decoder checks the
 canonical base32 encoding before accepting the checksum. See the
 [official decoder](https://stellar.github.io/js-stellar-base/strkey.js.html).
 The six golden fixtures now retain their original payload address spelling;
-this correction does not add address validation or repair malformed addresses.
+this correction does not add StrKey syntax validation or repair malformed address strings.
 Consumers that persisted lowercased output should re-decode the original raw
 events rather than change unrelated identifiers or opaque strings.
 
