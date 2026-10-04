@@ -20,6 +20,7 @@ import { ADMIN_ROLE, AdminAuthError, authorizeAdminPrincipal } from "../auth/adm
 import { overridePromptSimilarity, SimilarityOverrideError } from "../services/similarityOverride";
 
 export const SIMILARITY_OVERRIDE_AUDIENCE = "prompt-hash:similarity-override";
+export const SIMILARITY_SCAN_AUDIENCE = "prompt-hash:similarity-scan";
 
 
 export async function computeFingerprint(req: Request, res: Response) {
@@ -84,13 +85,22 @@ export async function compareSimhash(req: Request, res: Response) {
 
 export async function scanSimilarity(req: Request, res: Response) {
   try {
-    const { promptId, text } = req.body;
-    if (!promptId || !text) {
-      return res.status(400).json({ error: "promptId and text are required" });
+    // This scan rewrites an indexed prompt's moderation evidence. The public
+    // draft comparison uses checkPublishSimilarityHandler and does not write.
+    authorizeAdminPrincipal(req.get("authorization"), {
+      expectedAud: SIMILARITY_SCAN_AUDIENCE,
+      requiredRoles: [ADMIN_ROLE],
+    });
+    const { promptId, text } = req.body ?? {};
+    if (typeof promptId !== "string" || !promptId.trim() || typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ error: "promptId and text must be non-empty strings" });
     }
     const result = await scanForSimilarity(promptId, text);
     return res.json(result);
   } catch (err) {
+    if (err instanceof AdminAuthError) {
+      return res.status(err.code === "forbidden" ? 403 : 401).json({ error: err.message, code: err.code });
+    }
     const message = err instanceof Error ? err.message : "Internal error";
     return res.status(500).json({ error: message });
   }

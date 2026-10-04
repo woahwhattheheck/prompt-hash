@@ -390,3 +390,65 @@ describe("optional appeal projection", () => {
     expect(appeal.previousDecisions).toHaveLength(0);
   });
 });
+
+describe("authenticated stored similarity scan", () => {
+  const scanBody = { promptId: "242", text: "unrelated replacement draft" };
+  const scanAudience = "prompt-hash:similarity-scan";
+  let candidates: any;
+
+  beforeEach(() => {
+    candidates = vi.spyOn(Prompt.collection, "find").mockReturnValue({
+      toArray: async () => [],
+    } as any);
+  });
+
+  function scan(payload: any = scanBody, credential: string | null = token({ aud: scanAudience })) {
+    const operation = request(app).post("/api/fingerprint/scan");
+    if (credential !== null) operation.set("Authorization", `Bearer ${credential}`);
+    return operation.send(payload);
+  }
+
+  it.each([
+    ["missing", () => null, 401],
+    ["invalid signature", () => token({ aud: scanAudience, secret: "another-test-only-secret-with-32-characters" }), 401],
+    ["override audience", () => token(), 401],
+    ["reviewer role", () => token({ aud: scanAudience, roles: ["report_reviewer"] }), 403],
+  ])("rejects %s credentials before reading or overwriting a stored decision", async (_label, credential, status) => {
+    const response = await scan({ ...scanBody, roles: ["admin"], actorAddress: actor }, credential());
+    expect(response.status).toBe(status);
+    expect(candidates).not.toHaveBeenCalled();
+    expectNoWrite();
+    expect(prompt.similarityFlag).toBe("highly_similar");
+    expect(prompt.similarityScore).toBe(0.97);
+  });
+
+  it("allows a scan-scoped administrator to persist the actual service result", async () => {
+    const response = await scan();
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ flag: "clean", score: 0, similarTo: null });
+    expect(candidates).toHaveBeenCalledTimes(1);
+    expect(promptWrite).toHaveBeenCalledTimes(1);
+    expect(prompt.similarityFlag).toBe("clean");
+    expect(prompt.similarityScore).toBe(0);
+  });
+
+  it.each([
+    { promptId: {}, text: "draft" },
+    { promptId: "242", text: {} },
+    { promptId: "  ", text: "draft" },
+    { promptId: "242", text: "  " },
+  ])("rejects malformed scan input without reading or writing storage", async payload => {
+    expect((await scan(payload)).status).toBe(400);
+    expect(candidates).not.toHaveBeenCalled();
+    expectNoWrite();
+  });
+
+  it("keeps the public draft comparison read-only and available without a credential", async () => {
+    const response = await request(app).post("/api/fingerprint/publish-check").send({ content: "new draft" });
+    expect(response.status).toBe(200);
+    expect(response.body.decision).toBe("allow");
+    expect(candidates).toHaveBeenCalledTimes(1);
+    expectNoWrite();
+    expect(prompt.similarityFlag).toBe("highly_similar");
+  });
+});

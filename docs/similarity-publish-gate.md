@@ -15,6 +15,7 @@ The current `/sell` form checks the draft against indexed prompts and maps the s
 ## API
 
 - `POST /api/fingerprint/publish-check` — body `{ title, content, excludeOnChainId? }` → `{ decision, score, similarTo, flag, feedback }`
+- `POST /api/fingerprint/scan` — administrator-only rescan of an existing indexed prompt; body `{ promptId, text }` requires non-empty strings. This endpoint persists moderation evidence.
 - `POST /api/fingerprint/override` — authenticated maintainer override; body `{ promptId, newDecision, reason, appealId? }`, response `{ override, result, replayed, appealSync? }`
 - Appeals remain on `/api/appeals*` for creator false-positive requests
 
@@ -31,6 +32,24 @@ The publish-check endpoint reads indexed candidates and returns the calculated d
 The current `PromptHashClient.createPrompt` is still a stub returning `{ success: true, txHash: "tx_mock", promptId: "123" }`. It does not invoke the supplied wallet signer or submit a contract transaction. A form success message is therefore not evidence of on-chain publication on this branch.
 
 The authenticated override below updates an **existing indexed Prompt** and its audit. A later new-draft publish-check recomputes similarity from candidate text; it does not consume that override as an admission decision for the draft. Persisted review enforcement, binding a pending draft to a maintainer decision, and live contract submission remain integration work. The existing override authorization and audit guarantees remain separate.
+
+## Stored scan authorization
+
+The stored-prompt scan endpoint also requires a verified bearer principal with the `admin` role, bound to audience `prompt-hash:similarity-scan`. Authorization runs before input validation or storage access. Missing, invalid or incorrectly scoped credentials return 401; a verified principal without the required role receives 403. Request-body identities and roles cannot authorize the scan. A similarity-override credential is intentionally scoped to its own operation and cannot authorize a rescan.
+
+This closes an alternate write path: anonymous callers could previously submit arbitrary text to `/api/fingerprint/scan` and overwrite an indexed prompt's similarity score and flag despite the protected override route. Trusted internal indexer calls keep using the existing service directly. The creator's public `/api/fingerprint/publish-check` remains read-only and requires no administrator credential. Provision scan credentials server-side through the existing principal issuer; never place the signing secret or an administrator credential in the public creator client.
+
+### Stored scan authorization validation (2026-10-04)
+
+The selected regression against parent `447f6069a5b0682784a61e1a1285304cdbaf0486` returned HTTP 200 for missing credentials, failing the expected 401. After the handler repair, the ten stored-scan cases and one existing audited-override control passed: **11 passed, 36 unselected**, with 89 ms reported for the tests (770 ms for the Vitest process). No unselected case was executed or counted as passing.
+
+This execution used Node 24.19.0, Vitest 4.1.10, Express 5.2.1, Supertest 7.2.2, and Mongoose 9.9.2. It exercised the actual registered router, signed-principal verifier, moderation service and Mongoose query casting. Only the MongoDB collection boundary used the existing in-memory adapter. Missing or invalid credentials, wrong audience, and insufficient role caused no candidate read or prompt write; the scoped administrator persisted the real service result. Malformed input caused no storage access, and public draft comparison remained available without a credential and did not write. This does not establish live MongoDB, indexer deployment, wallet or contract behavior, or performance beyond this local execution.
+
+Reproduce the focused selection with the existing installed dependencies:
+
+```bash
+node node_modules/vitest/vitest.mjs run --config vitest.similarity.config.mjs src/test/similarityOverride.test.ts -t 'authenticated stored similarity scan|uses the exact verified subject' --reporter=dot
+```
 
 ## Override audit
 
