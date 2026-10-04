@@ -196,7 +196,10 @@ function loadKeyRing(): Map<number, Buffer> {
     const pv =
       Number.isFinite(prevVer) && prevVer >= 1 ? Math.floor(prevVer) : Math.max(1, ver - 1);
     const key = decodeKeyMaterial(previous);
-    if (key) ring.set(pv, key);
+    // The primary version is authoritative for new writes. If a rotation is
+    // misconfigured with duplicate version IDs, never let recovery material
+    // replace the primary key in the ring.
+    if (key && !ring.has(pv)) ring.set(pv, key);
   }
 
   return ring;
