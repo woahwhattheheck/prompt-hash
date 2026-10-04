@@ -180,32 +180,52 @@ describe("cache reliability", () => {
     ]);
   });
 
-  it("fences an in-flight load when its key pattern is invalidated", async () => {
-    const client = redisClient();
-    createClient.mockReturnValue(client);
-    const stale = deferred<{ id: number }[]>();
-    const fresh = deferred<{ id: number }[]>();
-    const staleLoader = jest.fn(() => stale.promise);
-    const freshLoader = jest.fn(() => fresh.promise);
+  it.each([
+    { pattern: "*", suffix: "a", other: "a", otherNamespace: "search" },
+    { pattern: "a*b?c", suffix: "axxbyc", other: "axxbzzc" },
+    { pattern: "?", suffix: "a", other: "ab" },
+    { pattern: "[ab]", suffix: "a", other: "c" },
+    { pattern: "[c-a]", suffix: "b", other: "d" },
+    { pattern: "[a-é]", suffix: "0", other: "b" },
+    { pattern: "[^a-c]", suffix: "d", other: "b" },
+    { pattern: "\\*", suffix: "*", other: "a" },
+    { pattern: "[\\]]", suffix: "]", other: "a" },
+    { pattern: "\\", suffix: "\\", other: "a" },
+    { pattern: "??", suffix: "é", other: "a" },
+  ])(
+    "fences Redis glob $pattern matches without invalidating unrelated loads",
+    async ({ pattern, suffix, other, otherNamespace = "detail" }) => {
+      const client = redisClient();
+      createClient.mockReturnValue(client);
+      const key = `prompts:detail:${suffix}`;
+      const unrelatedKey = `prompts:${otherNamespace}:${other}`;
+      const stale = deferred<number>();
+      const fresh = deferred<number>();
+      const unrelated = deferred<number>();
+      const freshLoader = jest.fn(() => fresh.promise);
+      const unrelatedLoader = jest.fn(() => unrelated.promise);
 
-    const first = cacheGetOrLoad("prompts:list:all", staleLoader);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await cacheDelPattern("prompts:list:*");
-    const second = cacheGetOrLoad("prompts:list:all", freshLoader);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+      const first = cacheGetOrLoad(key, () => stale.promise);
+      const otherFirst = cacheGetOrLoad(unrelatedKey, unrelatedLoader);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await cacheDelPattern(`prompts:detail:${pattern}`);
+      const second = cacheGetOrLoad(key, freshLoader);
+      const otherAgain = cacheGetOrLoad(unrelatedKey, unrelatedLoader);
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(staleLoader).toHaveBeenCalledTimes(1);
-    expect(freshLoader).toHaveBeenCalledTimes(1);
-
-    stale.resolve([{ id: 1 }]);
-    fresh.resolve([{ id: 2 }]);
-    await expect(first).resolves.toEqual([{ id: 1 }]);
-    await expect(second).resolves.toEqual([{ id: 2 }]);
-    expect(client.set).toHaveBeenCalledTimes(1);
-    expect(client.set).toHaveBeenCalledWith("prompts:list:all", '[{"id":2}]', {
-      EX: 60,
-    });
-  });
+      stale.resolve(1);
+      fresh.resolve(2);
+      unrelated.resolve(3);
+      await expect(
+        Promise.all([first, second, otherFirst, otherAgain]),
+      ).resolves.toEqual([1, 2, 3, 3]);
+      expect(freshLoader).toHaveBeenCalledTimes(1);
+      expect(unrelatedLoader).toHaveBeenCalledTimes(1);
+      expect(client.set).toHaveBeenCalledTimes(2);
+      expect(client.set).toHaveBeenCalledWith(key, "2", { EX: 60 });
+      expect(client.set).toHaveBeenCalledWith(unrelatedKey, "3", { EX: 60 });
+    },
+  );
 
   it.each([
     { label: "LF", separator: "\n" },

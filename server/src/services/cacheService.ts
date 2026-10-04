@@ -73,12 +73,85 @@ function invalidateKeys(keys: string[]): void {
   }
 }
 
+type RedisGlobToken = number | "any" | "star" | Uint8Array;
+
+/** Compile the byte-oriented glob syntax used by Redis SCAN MATCH. */
+function compileRedisGlob(pattern: string): RedisGlobToken[] {
+  const bytes = Buffer.from(pattern);
+  const tokens: RedisGlobToken[] = [];
+  for (let i = 0; i < bytes.length; i += 1) {
+    const byte = bytes[i];
+    if (byte === 42) {
+      if (tokens[tokens.length - 1] !== "star") tokens.push("star");
+    } else if (byte === 63) {
+      tokens.push("any");
+    } else if (byte === 91) {
+      const members = new Uint8Array(256);
+      const negated = bytes[i + 1] === 94;
+      if (negated) i += 1;
+      for (i += 1; i < bytes.length && bytes[i] !== 93; i += 1) {
+        if (bytes[i] === 92 && i + 1 < bytes.length) {
+          members[bytes[++i]] = 1;
+        } else if (i + 2 < bytes.length && bytes[i + 1] === 45) {
+          // Match the signed-byte range ordering in Redis's Linux matcher.
+          const start = (bytes[i] << 24) >> 24;
+          const end = (bytes[i + 2] << 24) >> 24;
+          for (let value = Math.min(start, end); value <= Math.max(start, end); value += 1) {
+            members[value & 255] = 1;
+          }
+          i += 2;
+        } else {
+          members[bytes[i]] = 1;
+        }
+      }
+      if (negated) {
+        for (let value = 0; value < members.length; value += 1) members[value] ^= 1;
+      }
+      tokens.push(members);
+    } else {
+      if (byte === 92 && i + 1 < bytes.length) i += 1;
+      tokens.push(bytes[i]);
+    }
+  }
+  return tokens;
+}
+
+function matchesRedisGlob(tokens: RedisGlobToken[], key: string): boolean {
+  const bytes = Buffer.from(key);
+  let tokenIndex = 0;
+  let keyIndex = 0;
+  let starIndex = -1;
+  let starKeyIndex = 0;
+  // Retry only the latest star; each retry consumes a byte, without recursion
+  // or the exponential backtracking of a translated regular expression.
+  while (keyIndex < bytes.length) {
+    const token = tokens[tokenIndex];
+    if (token === "star") {
+      starIndex = tokenIndex++;
+      starKeyIndex = keyIndex;
+    } else if (
+      token === "any" ||
+      token === bytes[keyIndex] ||
+      (token instanceof Uint8Array && token[bytes[keyIndex]] === 1)
+    ) {
+      tokenIndex += 1;
+      keyIndex += 1;
+    } else if (starIndex >= 0) {
+      tokenIndex = starIndex + 1;
+      keyIndex = ++starKeyIndex;
+    } else {
+      return false;
+    }
+  }
+  while (tokens[tokenIndex] === "star") tokenIndex += 1;
+  return tokenIndex === tokens.length;
+}
+
 function invalidatePattern(pattern: string): void {
   if (!inFlightLoads.size) return;
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  const expression = new RegExp(`^${escaped.replace(/\*/g, ".*")}$`, "s");
+  const tokens = compileRedisGlob(pattern);
   for (const [key, load] of inFlightLoads) {
-    if (expression.test(key)) load.invalidated = true;
+    if (matchesRedisGlob(tokens, key)) load.invalidated = true;
   }
 }
 
