@@ -1,0 +1,40 @@
+name: PH272 focused cache acceptance
+
+on:
+  push:
+    branches: [validation/ph272-cache-glob-ledger0938]
+
+permissions:
+  contents: read
+
+jobs:
+  cache:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7.2.5-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: server
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install existing locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run maintained cache suites
+        run: npm run test:cache-scan -- --runInBand
+      - name: Lint cache implementation
+        run: npx --no-install eslint src/services/cacheService.ts
+      - name: Compare MATCH cases with Redis 7.2.5 Linux
+        run: node validation/redis-glob-wire.cjs
