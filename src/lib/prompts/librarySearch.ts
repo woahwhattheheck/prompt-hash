@@ -50,12 +50,12 @@ export function filterLibraryPrompts(
 
     // Search query filter (matches title, category, creator, or preview text)
     if (normalizedQuery) {
-      const titleMatch = prompt.title.toLowerCase().includes(normalizedQuery);
-      const categoryMatch = prompt.category.toLowerCase().includes(normalizedQuery);
-      const creatorMatch = (prompt.creator ?? "").toLowerCase().includes(normalizedQuery);
-      const previewMatch = prompt.previewText.toLowerCase().includes(normalizedQuery);
-
-      if (!titleMatch && !categoryMatch && !creatorMatch && !previewMatch) {
+      if (
+        !prompt.title.toLowerCase().includes(normalizedQuery) &&
+        !prompt.category.toLowerCase().includes(normalizedQuery) &&
+        !(prompt.creator ?? "").toLowerCase().includes(normalizedQuery) &&
+        !prompt.previewText.toLowerCase().includes(normalizedQuery)
+      ) {
         return false;
       }
     }
