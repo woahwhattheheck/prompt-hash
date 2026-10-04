@@ -164,6 +164,40 @@ regressions were added to the existing Jest file; that extended Jest suite was
 not run for this batching continuation because its retained dependencies were
 unavailable.
 
+### Native MongoDB measurement (2026-10-04)
+
+[Run 37190015734](https://github.com/woahwhattheheck/prompt-hash/actions/runs/37190015734)
+compared baseline `a9c7d579` with published candidate `6b0b8f70`, using the
+complete service and unchanged real Mongoose models against a disposable
+MongoDB 7.0.14 service. The existing compound indexes remained enabled.
+[The complete receipt, raw samples, source pins, and reproduction](https://github.com/woahwhattheheck/prompt-hash/blob/c69d346ab314cd8e7cab9d36c41546288371581e/work/validation/ph277-mongo/RESULTS.md)
+are retained with the executed harness.
+
+| Refund rows | All `find` commands, before → after | Median aggregation, before → after | Ratio of medians |
+| --- | ---: | ---: | ---: |
+| 100 | 104 → 5 | 74.36 ms → 10.63 ms | 7.00× |
+| 1,000 | 1,004 → 14 | 535.70 ms → 58.44 ms | 9.17× |
+
+Historical purchase lookups fell from 100 to 1 and from 1,000 to 10.
+Both 1,000-row variants also issued two `getMore` commands; those cursor reads
+are separate from the table's `find` counts. Mongo driver command monitoring
+recorded the actual wire operations.
+
+Each representative size used one untimed warmup per variant and three paired
+measurements with alternating execution order. Complete statement objects,
+real HMAC signatures, CSV, and JSON matched on every pair. Only UUID and
+no-argument Date construction were controlled for generated metadata;
+`Date.now`, monotonic timing, database operations, and model casting remained
+real. Empty and mixed controls also preserved historical clawbacks, missing
+purchases, prompt/wallet casing, and repeated refund rows.
+
+The single public Ubuntu 24.04 job used Node 24.19.0, Mongoose 9.9.2, and
+Vitest 4.1.10. It completed successfully in 38 seconds including setup; the
+one native benchmark test passed. These warmed, synthetic measurements cover
+the aggregation call in that environment, including reads and reconciliation.
+They do not establish production latency or concurrent server throughput,
+and do not replace the separately documented maintained Jest suite.
+
 ## Tests
 
 ```bash
