@@ -482,11 +482,18 @@ export async function aggregateSellerStatementFromDb(
     };
   });
 
-  // Refunds that completed in this period (may claw back prior sales).
+  // Include the recorded refund transition even if a later metadata write
+  // moved updatedAt. Keep the old date window for legacy records; after
+  // resolving the audit timestamp below, filter again before lookups.
   const refundRecords = await FulfillmentRecord.find({
     promptId: { $in: onChainIds },
     status: "refunded",
-    updatedAt: { $gte: periodStartDate, $lte: periodEndDate },
+    $or: [
+      { updatedAt: { $gte: periodStartDate, $lte: periodEndDate } },
+      { auditLog: { $elemMatch: {
+        status: "refunded", at: { $gte: periodStartDate, $lte: periodEndDate },
+      } } },
+    ],
   }).lean();
 
   type RefundRecord = {
@@ -494,6 +501,7 @@ export async function aggregateSellerStatementFromDb(
     buyerWallet: string;
     updatedAt: Date | string;
     createdAt: Date | string;
+    auditLog?: Array<{ status?: string; at?: Date | string | null }> | null;
   };
   type RefundPurchase = {
     _id: { toString(): string };
@@ -501,7 +509,24 @@ export async function aggregateSellerStatementFromDb(
     buyerWallet: string;
     createdAt: Date | string;
   };
-  const records = refundRecords as RefundRecord[];
+  const records = (refundRecords as RefundRecord[]).map((record) => {
+    // There is one entitlement per prompt/buyer pair. Repeated status
+    // writes must not move its original completed refund to a new period.
+    let firstRefundAt: number | undefined;
+    for (const entry of record.auditLog ?? []) {
+      if (entry.status !== "refunded") continue;
+      const at = entry.at instanceof Date ? entry.at.getTime()
+        : typeof entry.at === "string" ? Date.parse(entry.at) : NaN;
+      if (Number.isFinite(at) && (firstRefundAt === undefined || at < firstRefundAt)) {
+        firstRefundAt = at;
+      }
+    }
+    // Older/imported rows without a usable transition retain their
+    // existing updatedAt fallback; no historical date is manufactured.
+    return { ...record, refundedAt: new Date(firstRefundAt ?? record.updatedAt).toISOString() };
+  }).filter((record) => isWithinPeriod(
+    record.refundedAt, options.periodStart, options.periodEnd,
+  ));
   // Purchase's unique compound index identifies one entitlement per pair.
   // Match its buyerWallet lowercase setter without changing prompt ID case.
   const purchaseKey = (record: { promptId: string; buyerWallet: string }) =>
@@ -543,7 +568,7 @@ export async function aggregateSellerStatementFromDb(
         : `${f.promptId}:${f.buyerWallet}`,
       promptId: f.promptId,
       originalGrossStroops: xlmToStroops(priceXlm),
-      refundedAt: new Date(f.updatedAt).toISOString(),
+      refundedAt: f.refundedAt,
       originalPurchasedAt: purchasedAt,
     });
   }
