@@ -95,13 +95,38 @@ wallet switch while the next feed is loading, a late response from the old
 wallet, mark-all-read, dismiss and disconnect. Wallet, query and notification
 client boundaries are controlled; React effects and rendering are real.
 
-A local candidate run completed seven cases (the six existing helper cases and
-one mounted interaction case) before the command runner became unavailable.
-The final hook and test were reconstructed from retained source after that
-outage. The seven-pass observation applies to the earlier local candidate;
-the reconstructed files have not been re-executed or checked with the formatter
-or linter. The intended comparison against the previous hook did not start.
-The local run used Node 24.19.0, Vitest 4.1.10, React 18.3.1, Testing Library
-16.3.2 and jsdom 29.1.1 from retained dependencies, with a focused resolver
-configuration. This was not a complete dependency installation, provider
-integration, live-wallet run or full application build.
+### Exact published hook execution
+
+Published source `f962fa3afb71b5f2c5b5b67359abf4790b892c1e` passed all
+seven cases in this file on a standard Ubuntu GitHub Actions runner. With the
+same test file and the previous hook from
+`1ecee476f69cb49b969ba57dafd595afc6fcf544`, the six helper cases passed and
+the interaction case failed at the wallet-switch assertion. The candidate
+passed seven cases with no failures or skips.
+
+The job checked the Git blobs of the hook, test and four notification modules
+against the published revision before execution, then confirmed that the final
+files were unchanged. The hook blob is
+`4eb9c946513cad5a550297afcf418ce2ab63843a`; the test blob is
+`7c4ac138df20944078bea9c0f27cc121c21b018b`.
+
+- [Execution and logs](https://github.com/woahwhattheheck/prompt-hash/actions/runs/37203591223)
+- [Reports, dependency inventory and source hashes](https://github.com/woahwhattheheck/prompt-hash/actions/runs/37203591223/artifacts/11303742106)
+- [Isolated execution configuration](https://github.com/woahwhattheheck/prompt-hash/tree/7e280dd7e64a75f2f22a22d2365cf1afaf5c6a12)
+
+Runtime: Node 24.21.0, Vitest 4.1.10, Vite 8.1.5, React and React DOM 19.2.5,
+Testing Library React 16.3.2 / DOM 10.4.1, and jsdom 29.1.1. The two child
+commands took 890 ms for the previous hook and 744 ms for the published hook,
+including test-runner startup. These timings describe this focused execution,
+not application throughput.
+
+Wallet, query and notification-client boundaries use the existing test mocks;
+React rendering and effects are real. The resolver supplies module identities
+for those mocks and throws if a mock factory is missing. This focused runtime
+does not install the full application dependency graph. Current lint,
+formatting, live-provider integration, live-wallet services and the complete
+application build were not run.
+
+The isolated execution closes the earlier local runner outage's final-source
+validation gap. Workflow scaffolding remains on the separate execution branch;
+the original contribution branch receives only this guide update.
