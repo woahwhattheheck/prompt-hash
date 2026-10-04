@@ -257,15 +257,26 @@ export async function cacheGet(key: string): Promise<string | null> {
   return result.status === "hit" ? result.value : null;
 }
 
-export async function cacheSet(
+export function cacheSet(
   key: string,
   value: string,
   ttlSeconds = DEFAULT_TTL,
 ): Promise<void> {
+  return writeCache(key, value, ttlSeconds);
+}
+
+async function writeCache(
+  key: string,
+  value: string,
+  ttlSeconds: number,
+  load?: InFlightLoad,
+): Promise<void> {
   let activeClient: RedisClientType | null = null;
   try {
     activeClient = await getClient();
-    if (!activeClient) return;
+    // The load may have been invalidated during serialization or reconnect.
+    // Recheck immediately before enqueueing SET, with no intervening await.
+    if (!activeClient || load?.invalidated) return;
     await withTimeout(activeClient.set(key, value, { EX: ttlSeconds }));
   } catch (error) {
     if (activeClient) invalidate(activeClient, "set", error);
@@ -376,7 +387,7 @@ export async function cacheGetOrLoad<T>(
       .then(loader)
       .then(async (value) => {
         if (!load.invalidated) {
-          await cacheSet(key, JSON.stringify(value), ttlSeconds);
+          await writeCache(key, JSON.stringify(value), ttlSeconds, load);
         }
         return value;
       })

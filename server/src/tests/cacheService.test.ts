@@ -11,6 +11,7 @@ import {
   cacheDelPattern,
   cacheGetOrLoad,
   cacheRead,
+  cacheSet,
 } from "../services/cacheService";
 
 function deferred<T>() {
@@ -360,6 +361,53 @@ describe("cache reliability", () => {
       await expect(result).resolves.toBe(1);
       await invalidation;
       expect(client.set).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["key", "pattern"])(
+    "fences %s invalidation while a completed load reconnects before writing",
+    async (kind) => {
+      const now = jest.spyOn(Date, "now").mockReturnValue(10_000);
+      const connection = deferred<void>();
+      const firstClient = redisClient();
+      const recoveredClient = redisClient({
+        connect: jest.fn(() => connection.promise),
+      });
+      createClient
+        .mockReturnValueOnce(firstClient)
+        .mockReturnValue(recoveredClient);
+      const key = "prompts:list:all";
+      const loaded = deferred<number>();
+      const first = cacheGetOrLoad(key, () => loaded.promise);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const onError = firstClient.on.mock.calls.find(
+        ([event]) => event === "error",
+      )![1];
+      onError(new Error("connection closed"));
+      now.mockReturnValue(11_001);
+      loaded.resolve(1);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(recoveredClient.connect).toHaveBeenCalledTimes(1);
+
+      // The loader has passed its first flag check and is awaiting reconnect.
+      const invalidation =
+        kind === "key" ? cacheDel(key) : cacheDelPattern("prompts:list:*");
+      connection.resolve();
+      await expect(first).resolves.toBe(1);
+      await invalidation;
+      expect(recoveredClient.set).not.toHaveBeenCalled();
+
+      await expect(
+        cacheGetOrLoad(key, () => Promise.resolve(2), 23),
+      ).resolves.toBe(2);
+      expect(recoveredClient.set).toHaveBeenCalledTimes(1);
+      expect(recoveredClient.set).toHaveBeenCalledWith(key, "2", { EX: 23 });
+      await cacheSet("direct", "3", 17);
+      expect(recoveredClient.set).toHaveBeenCalledTimes(2);
+      expect(recoveredClient.set).toHaveBeenCalledWith("direct", "3", {
+        EX: 17,
+      });
     },
   );
 
