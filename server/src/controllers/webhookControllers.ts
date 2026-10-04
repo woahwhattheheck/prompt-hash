@@ -5,7 +5,7 @@
  * event filtering live in `src/lib/domain/webhookDomain.ts`.
  */
 import { Request, Response } from "express";
-import { sendDomainResult } from "../../../src/lib/domain/domainResult";
+import { internalServerError, sendDomainResult } from "../../../src/lib/domain/domainResult";
 import {
   deleteWebhookSubscription,
   getWebhookSubscription,
@@ -24,8 +24,8 @@ export const RegisterWebhook = async (req: Request, res: Response): Promise<Resp
       body: req.body,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
 
@@ -38,8 +38,8 @@ export const GetWebhook = async (req: Request, res: Response): Promise<Response>
       query: req.query as Record<string, unknown>,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
 
@@ -51,7 +51,7 @@ export const DeleteWebhook = async (req: Request, res: Response): Promise<Respon
       body: req.body,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
