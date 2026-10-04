@@ -18,6 +18,7 @@ import {
   CREATOR_DRAFTS_READ,
   CREATOR_OWNED_READ,
   mapPromptsPrivate,
+  mapPromptsPublic,
   requireCreatorReadSession,
 } from "../services/creatorPrivacy";
 import mongoose from "mongoose";
@@ -251,11 +252,8 @@ export const GetPrompts = async (
         .sort({ createdAt: -1 });
     });
 
-    // Defense in depth (#142): public listing never serializes draft plaintext.
-    const publicPrompts = (Array.isArray(prompts) ? prompts : []).filter(
-      (p: any) => p?.listingStatus !== "draft",
-    );
-    return res.json(publicPrompts);
+    // Public projection (#142): never serialize prompt content/private fields.
+    return res.json(mapPromptsPublic(Array.isArray(prompts) ? prompts : []));
   } catch (error) {
     console.error("Fetch prompts error:", error);
 
