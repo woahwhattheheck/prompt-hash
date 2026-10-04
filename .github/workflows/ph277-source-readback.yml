@@ -19,9 +19,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/ph277-source"
-          git archive --format=tar HEAD server/src server/package.json server/package-lock.json server/jest.config.js docs/payout-statements.md package.json package-lock.json > "$RUNNER_TEMP/ph277-source/source.tar"
+          git archive --format=tar HEAD server docs/payout-statements.md package.json package-lock.json > "$RUNNER_TEMP/ph277-source/source.tar"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/ph277-source/source.txt"
-          git ls-tree -r HEAD server/src > "$RUNNER_TEMP/ph277-source/blobs.txt"
+          git ls-tree -r HEAD server > "$RUNNER_TEMP/ph277-source/blobs.txt"
           sha256sum "$RUNNER_TEMP/ph277-source/source.tar"
       - uses: actions/upload-artifact@v4
         with:
