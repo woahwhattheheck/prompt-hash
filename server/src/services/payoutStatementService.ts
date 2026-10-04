@@ -44,7 +44,10 @@ export class PayoutStatementPeriodError extends RangeError {
   }
 }
 
-function validatePayoutPeriod(periodStart: unknown, periodEnd: unknown): void {
+function validatePayoutPeriod(
+  periodStart: unknown,
+  periodEnd: unknown,
+): { start: number; end: number } {
   if (typeof periodStart !== "string" || typeof periodEnd !== "string") {
     throw new PayoutStatementPeriodError(
       "periodStart and periodEnd must be timestamp or date strings",
@@ -63,6 +66,7 @@ function validatePayoutPeriod(periodStart: unknown, periodEnd: unknown): void {
       "periodStart must be before or equal to periodEnd",
     );
   }
+  return { start, end };
 }
 
 function safeStroops(value: number, field: string, allowNegative = false): number {
@@ -118,6 +122,15 @@ export function isWithinPeriod(
 ): boolean {
   const t = toMs(isoTimestamp);
   return t >= toMs(periodStart) && t <= toMs(periodEnd);
+}
+
+/** Reuse validated instants when checking a statement's complete event batch. */
+function isWithinParsedPeriod(
+  isoTimestamp: string,
+  period: { start: number; end: number },
+): boolean {
+  const t = toMs(isoTimestamp);
+  return t >= period.start && t <= period.end;
 }
 
 function buildSaleLine(
@@ -196,7 +209,7 @@ export function deriveStatementStatus(
 export function reconcilePayoutStatement(
   input: ReconcilePayoutInput,
 ): PayoutStatement {
-  validatePayoutPeriod(input.period?.start, input.period?.end);
+  const parsedPeriod = validatePayoutPeriod(input.period?.start, input.period?.end);
   const feeBps = input.feeBps ?? DEFAULT_FEE_BPS;
   const period = input.period;
   statementFeeStroops(0, feeBps);
@@ -209,11 +222,11 @@ export function reconcilePayoutStatement(
   );
 
   const purchasesInPeriod = input.purchases.filter((p) =>
-    isWithinPeriod(p.purchasedAt, period.start, period.end),
+    isWithinParsedPeriod(p.purchasedAt, parsedPeriod),
   );
 
   const refundsInPeriod = (input.refunds ?? []).filter((r) =>
-    isWithinPeriod(r.refundedAt, period.start, period.end),
+    isWithinParsedPeriod(r.refundedAt, parsedPeriod),
   );
 
   const sales = purchasesInPeriod.map((p) => buildSaleLine(p, feeBps));
@@ -415,7 +428,7 @@ export interface AggregateFromDbOptions {
 export async function aggregateSellerStatementFromDb(
   options: AggregateFromDbOptions,
 ): Promise<PayoutStatement> {
-  validatePayoutPeriod(options.periodStart, options.periodEnd);
+  const parsedPeriod = validatePayoutPeriod(options.periodStart, options.periodEnd);
   const previousBalanceCarryoverStroops = safeStroops(
     options.previousBalanceCarryoverStroops === undefined
       ? 0
@@ -456,8 +469,8 @@ export async function aggregateSellerStatementFromDb(
     });
   }
 
-  const periodStartDate = new Date(options.periodStart);
-  const periodEndDate = new Date(options.periodEnd);
+  const periodStartDate = new Date(parsedPeriod.start);
+  const periodEndDate = new Date(parsedPeriod.end);
 
   const purchases = await Purchase.find({
     promptId: { $in: onChainIds },
@@ -524,9 +537,7 @@ export async function aggregateSellerStatementFromDb(
     // Older/imported rows without a usable transition retain their
     // existing updatedAt fallback; no historical date is manufactured.
     return { ...record, refundedAt: new Date(firstRefundAt ?? record.updatedAt).toISOString() };
-  }).filter((record) => isWithinPeriod(
-    record.refundedAt, options.periodStart, options.periodEnd,
-  ));
+  }).filter((record) => isWithinParsedPeriod(record.refundedAt, parsedPeriod));
   // Purchase's unique compound index identifies one entitlement per pair.
   // Match its buyerWallet lowercase setter without changing prompt ID case.
   const purchaseKey = (record: { promptId: string; buyerWallet: string }) =>

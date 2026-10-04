@@ -1,0 +1,143 @@
+{
+  "measured_at": "2026-10-04T12:19:17.393Z",
+  "baseline_commit": "4ca1a18d6f761628918480e77e99e59e6f0dca47",
+  "source_blobs": [
+    "8ea9c8cbaae9a91cb8fec10bea3d45e3eb32d04f",
+    "dade0f3d2df566c7fc8fe5541cfdb863f2d1e5e3"
+  ],
+  "fee_blob": "e9001bbe60250837b171b95fb01a4fc9f5e8196c",
+  "node": "v22.16.0",
+  "typescript": "5.8.3",
+  "platform": "linux x64",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "explicit_gc": true,
+  "method": "Complete reconciliation including real fee arithmetic and HMAC; three warmups, seven paired samples with alternating order. Export checks and input-preservation checks are outside the timed region. Metadata is fixed.",
+  "controls": {
+    "reconciliation_comparisons": 11,
+    "recorded_model_aggregation_comparisons": 1,
+    "all_passed": true
+  },
+  "limits": "Synthetic warmed in-process workloads; not production latency, live MongoDB, HTTP, a semantic typecheck, or the maintained Jest suite. Models are recorded fixtures and Date/UUID metadata is controlled in the aggregation comparison.",
+  "rows": [
+    {
+      "purchases": 1000,
+      "refunds": 100,
+      "input_sha256": "4d0caa843f3e45515110b342b73ec5a4109b3fb409091b446b44d4375b5b66dd",
+      "parse_calls": [
+        {
+          "total": 3302,
+          "boundaries": 2202
+        },
+        {
+          "total": 1102,
+          "boundaries": 2
+        }
+      ],
+      "samples_ms": [
+        [
+          4.687044000000014,
+          4.628174999999999,
+          4.388975000000016,
+          4.462036000000012,
+          4.426581999999996,
+          4.758330000000001,
+          4.477128999999991
+        ],
+        [
+          3.382263000000023,
+          3.6309960000000387,
+          3.6021129999999744,
+          3.535363000000018,
+          3.3935500000000047,
+          3.5290529999999762,
+          3.3945210000000543
+        ]
+      ],
+      "median_ms": [
+        4.477128999999991,
+        3.5290529999999762
+      ],
+      "speedup": 1.2686488414880766
+    },
+    {
+      "purchases": 10000,
+      "refunds": 1000,
+      "input_sha256": "f48f37ced761ef7855ebf92a1e7e87d9ebaf19774c9804f8cb28664db9570fbd",
+      "parse_calls": [
+        {
+          "total": 33002,
+          "boundaries": 22002
+        },
+        {
+          "total": 11002,
+          "boundaries": 2
+        }
+      ],
+      "samples_ms": [
+        [
+          41.62977000000001,
+          40.26312699999994,
+          44.24733400000014,
+          44.5836089999998,
+          41.858494000000064,
+          41.893236000000115,
+          41.615598999999975
+        ],
+        [
+          31.20572500000003,
+          31.556493000000046,
+          32.73063699999989,
+          32.664698000000044,
+          31.750964000000067,
+          31.533466999999973,
+          32.13905900000009
+        ]
+      ],
+      "median_ms": [
+        41.858494000000064,
+        31.750964000000067
+      ],
+      "speedup": 1.3183377361392863
+    },
+    {
+      "purchases": 50000,
+      "refunds": 5000,
+      "input_sha256": "9cb24e9035a75abd5cff79e5e36b78b762ad9683377c453e54c043a5615042dd",
+      "parse_calls": [
+        {
+          "total": 165002,
+          "boundaries": 110002
+        },
+        {
+          "total": 55002,
+          "boundaries": 2
+        }
+      ],
+      "samples_ms": [
+        [
+          208.026789,
+          212.59698699999944,
+          216.20173299999988,
+          217.62980900000002,
+          212.90013200000067,
+          220.75697900000068,
+          217.6686580000005
+        ],
+        [
+          158.7929409999997,
+          154.89374099999986,
+          164.17326700000012,
+          165.80379600000015,
+          160.68063799999982,
+          157.88296300000002,
+          160.0241449999994
+        ]
+      ],
+      "median_ms": [
+        216.20173299999988,
+        160.0241449999994
+      ],
+      "speedup": 1.351056948312398
+    }
+  ]
+}
