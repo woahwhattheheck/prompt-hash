@@ -205,9 +205,25 @@ Rules enforced in `src/lib/reports/abuseEvidence.ts` and
 
 ### Reporter privacy
 
-- `reporterPrivate` defaults to `true`
-- Wallet is stored for duplicate detection and admin triage
-- Non-admin / log surfaces redact to a short prefix (`ABCD…WXYZ`)
+`reporterPrivate` defaults to `true` and is stored with the report. The supplied
+wallet is stored for duplicate detection and authorized triage. The flag does
+not mask the wallet in the current private report queue:
+
+| Caller of `GET /api/prompts/reports` | Reporter wallet visibility |
+| --- | --- |
+| Verified `admin` | Full stored `reporterAddress`, including reports with `reporterPrivate: true` |
+| Verified `report_reviewer` | The same full stored `reporterAddress`; status changes still require `admin` |
+| Missing/invalid principal or a principal without a permitted role | No report-list response; the authorization gate returns `401` or `403` |
+
+The [controller](../server/src/controllers/controllers.ts) uses the same full
+report serialization for both authorized reader roles. Grant `report_reviewer`
+only to operators permitted to see reporter identities; it is not a redacted
+queue role, and `reporterPrivate` does not change that access boundary.
+
+Successful submission logs use `redactReporterAddress` to mask the wallet
+(`ABCD…WXYZ`, or `***` for values no longer than eight characters) and omit
+free-form descriptions and evidence notes. This log masking is separate from
+the authorized queue response.
 
 ### Moderation status machine
 
