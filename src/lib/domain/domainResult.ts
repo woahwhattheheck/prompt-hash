@@ -23,6 +23,11 @@ export function fail(status: number, error: string): DomainResult<{ error: strin
   return { status, body: { error } };
 }
 
+/** Stable client-safe mapping for unexpected adapter failures. */
+export function internalServerError(): DomainResult<{ error: string }> {
+  return fail(500, "Internal server error.");
+}
+
 /** Write a DomainResult onto a Vercel / Express-like response. */
 export function sendDomainResult(
   res: { status: (code: number) => { json: (body: unknown) => unknown } },
