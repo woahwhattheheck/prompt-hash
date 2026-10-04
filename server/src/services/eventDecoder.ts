@@ -303,6 +303,12 @@ export function decodeEvent(
     );
   }
 
+  // Normalize the optional referrer before sorting so absent and explicit
+  // null values have the same canonical key order alongside additive fields.
+  if (resolved.lifecycle === "purchase" && !("referrer" in merged)) {
+    merged.referrer = null;
+  }
+
   // Deterministic field projection: required keys first (stable order), then
   // optional additive keys sorted alphabetically (v2+).
   const optionalKeys = Object.keys(merged)
@@ -312,11 +318,6 @@ export function decodeEvent(
   const fields: Record<string, string | null> = {};
   for (const key of [...required, ...optionalKeys]) {
     fields[key] = asString(merged[key]);
-  }
-
-  // referrer is Optional<Address> on PromptPurchased — keep explicit null.
-  if (resolved.lifecycle === "purchase" && !("referrer" in fields)) {
-    fields.referrer = null;
   }
 
   const event: CanonicalLifecycleEvent = {
