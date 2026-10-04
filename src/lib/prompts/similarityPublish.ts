@@ -51,3 +51,37 @@ export async function checkPublishSimilarity(input: {
 
   return response.json() as Promise<PublishSimilarityResult>;
 }
+
+
+export interface PublicationReviewResult extends PublishSimilarityResult {
+  reviewId: string | null;
+  persisted: boolean;
+  initialDecision: Exclude<PublicationDecision, "allow"> | null;
+  decisionVersion: number | null;
+}
+
+export async function requestPublicationReview(input: {
+  creatorAddress: string;
+  title: string;
+  content: string;
+}): Promise<PublicationReviewResult> {
+  const response = await fetch("/api/fingerprint/publication-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `Publication review failed (${response.status})`;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.error) message = String(parsed.error);
+    } catch {
+      // keep message
+    }
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<PublicationReviewResult>;
+}

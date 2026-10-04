@@ -39,7 +39,7 @@ import {
 import { MarkdownContent } from "@/components/MarkdownContent";
 import { SimilarityPublishFeedback } from "@/components/sell/SimilarityPublishFeedback";
 import {
-  checkPublishSimilarity,
+  requestPublicationReview,
   type PublishSimilarityResult,
 } from "@/lib/prompts/similarityPublish";
 
@@ -81,7 +81,6 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [similarityResult, setSimilarityResult] = useState<PublishSimilarityResult | null>(null);
   const [similarityChecking, setSimilarityChecking] = useState(false);
-  const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
   const [showChecklist, setShowChecklist] = useState(true);
   const [draftRestored, setDraftRestored] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -118,7 +117,6 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const watchAllFields = watch();
 
   useEffect(() => {
-    setReviewAcknowledged(false);
     setSimilarityResult(null);
   }, [watchAllFields.title, watchAllFields.fullPrompt]);
 
@@ -324,7 +322,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
 
     try {
       setSimilarityChecking(true);
-      const gate = await checkPublishSimilarity({
+      const gate = await requestPublicationReview({
+        creatorAddress: address,
         title: data.title,
         content: data.fullPrompt,
       });
@@ -333,16 +332,15 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
 
       if (gate.decision === "block") {
         setSubmitError(
-          "Publication blocked: this draft is too similar to an existing listing. Revise the prompt or request a maintainer override via appeal.",
+          "Publication blocked: this exact draft is held by the similarity gate. No contract transaction was attempted. Revise it or request a maintainer override.",
         );
         return;
       }
 
-      if (gate.decision === "review" && !reviewAcknowledged) {
+      if (gate.decision === "review") {
         setSubmitError(
-          "Elevated similarity — confirm you want to submit for maintainer review, then click Create again.",
+          "Submitted for maintainer review. This exact draft is held off-chain and no contract transaction was attempted. Submit again after a maintainer clears it.",
         );
-        setReviewAcknowledged(true);
         return;
       }
 

@@ -11,6 +11,7 @@ export default defineConfig({
     include: [
       "src/test/similarityDetection.test.ts",
       "src/test/similarityOverride.test.ts",
+      "src/test/publicationReview.test.ts",
       "src/test/appeal.test.ts",
     ],
   },

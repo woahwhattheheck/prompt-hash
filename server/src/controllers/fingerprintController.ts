@@ -18,9 +18,15 @@ import {
 } from "../services/similarityDetection";
 import { ADMIN_ROLE, AdminAuthError, authorizeAdminPrincipal } from "../auth/adminPrincipal";
 import { overridePromptSimilarity, SimilarityOverrideError } from "../services/similarityOverride";
+import {
+  overridePublicationReview,
+  PublicationReviewError,
+  requestPublicationReview,
+} from "../services/publicationReview";
 
 export const SIMILARITY_OVERRIDE_AUDIENCE = "prompt-hash:similarity-override";
 export const SIMILARITY_SCAN_AUDIENCE = "prompt-hash:similarity-scan";
+export const PUBLICATION_REVIEW_AUDIENCE = "prompt-hash:publication-review";
 
 
 export async function computeFingerprint(req: Request, res: Response) {
@@ -151,6 +157,45 @@ export async function checkPublishSimilarityHandler(req: Request, res: Response)
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal error";
     return res.status(500).json({ error: message });
+  }
+}
+
+export async function requestPublicationReviewHandler(req: Request, res: Response) {
+  try {
+    const result = await requestPublicationReview(req.body ?? {});
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof PublicationReviewError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    return res.status(500).json({ error: "Unable to evaluate publication review" });
+  }
+}
+
+export async function overridePublicationReviewDecision(req: Request, res: Response) {
+  try {
+    // Authenticate before validating the requested mutation or reading review state.
+    const principal = authorizeAdminPrincipal(req.get("authorization"), {
+      expectedAud: PUBLICATION_REVIEW_AUDIENCE,
+      requiredRoles: [ADMIN_ROLE],
+    });
+    const result = await overridePublicationReview(
+      req.params.id,
+      req.body ?? {},
+      principal.sub,
+    );
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof AdminAuthError) {
+      return res.status(err.code === "forbidden" ? 403 : 401).json({
+        error: err.message,
+        code: err.code,
+      });
+    }
+    if (err instanceof PublicationReviewError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    return res.status(500).json({ error: "Unable to update publication review" });
   }
 }
 
