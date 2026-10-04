@@ -41,7 +41,12 @@ export function createMemorySellerNotificationRepository(): SellerNotificationRe
 
     async saveCursor(state) {
       const key = normalizeWallet(state.wallet);
-      const next = { ...state, wallet: key };
+      const previousReadIds = cursors.get(key)?.readIds ?? [];
+      const next = {
+        ...state,
+        wallet: key,
+        readIds: [...new Set([...previousReadIds, ...state.readIds])],
+      };
       cursors.set(key, next);
       return next;
     },

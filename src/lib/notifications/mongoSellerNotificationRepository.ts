@@ -78,10 +78,13 @@ export function createMongoSellerNotificationRepository(
 
     async saveCursor(state) {
       const key = normalizeWallet(state.wallet);
-      const next = { ...state, wallet: key };
+      const { readIds, ...next } = { ...state, wallet: key };
       const doc = (await Cursor.findOneAndUpdate(
         { wallet: key },
-        { $set: next },
+        {
+          $set: next,
+          $addToSet: { readIds: { $each: readIds } },
+        },
         { upsert: true, new: true, lean: true },
       )) as LeanCursor;
       return strip(doc) as SellerNotificationCursorState;

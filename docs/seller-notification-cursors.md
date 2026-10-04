@@ -46,6 +46,15 @@ other incompatible containers are rejected before reads or updates can silently
 discard events or read state; the original file bytes remain intact. Restore a
 compatible file to resume use, or explicitly clear the repository to reset it.
 
+Read acknowledgements are additive until an explicit repository clear. A cursor
+save retains IDs already stored, including acknowledgements completed by another
+device after that cursor snapshot was read. Advancing a stale cursor therefore
+keeps existing read state. Memory and file repositories merge IDs at the write
+boundary; the file merge runs under its existing lock. Mongo uses
+[`$addToSet` with `$each`](https://www.mongodb.com/docs/manual/reference/operator/update/addtoset/)
+in the cursor update. Read IDs represent set membership; feed ordering and
+cursor metadata retain their existing behavior.
+
 ## Guarantees
 
 - Events are neither lost nor duplicated across devices and restarts.
@@ -66,4 +75,5 @@ npm run test:seller-notif-cursors
 
 Covers missed polls, storage clearing / cursor recovery, two devices, duplicate
 events, reorg/correction, file-store restart, incompatible-file preservation,
-and recovery after restoring a compatible file.
+recovery after restoring a compatible file, concurrent acknowledgements, and
+stale cursor advances that preserve read state until an explicit clear.

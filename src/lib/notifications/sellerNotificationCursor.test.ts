@@ -173,6 +173,99 @@ describe("two devices", () => {
   });
 });
 
+describe("concurrent read acknowledgements", () => {
+  it.each(["memory", "file"] as const)(
+    "preserves two devices' successful marks in the %s repository",
+    async (backend) => {
+      const dir =
+        backend === "file"
+          ? fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-read-set-"))
+          : null;
+      const filePath = dir ? path.join(dir, "store.json") : null;
+      const repo = filePath
+        ? createFileSellerNotificationRepository(filePath)
+        : createMemorySellerNotificationRepository();
+      configureSellerNotificationRepository(repo);
+      try {
+        const a = sale(1);
+        const b = sale(2, "tx-2");
+        await appendSellerEvent(a);
+        await appendSellerEvent(b);
+        const ids = [`notif:${a.eventId}`, `notif:${b.eventId}`];
+
+        await Promise.all([
+          markSellerNotificationsRead(WALLET, [ids[0]]),
+          markSellerNotificationsRead(WALLET, [ids[1]]),
+        ]);
+
+        if (filePath) {
+          configureSellerNotificationRepository(
+            createFileSellerNotificationRepository(filePath),
+          );
+        }
+        const feed = await getSellerFeed(WALLET);
+        expect(feed.notifications).toHaveLength(2);
+        expect(feed.unreadCount).toBe(0);
+        expect(new Set(feed.cursor.readIds)).toEqual(new Set(ids));
+        expect(feed.notifications.every((notification) => notification.read)).toBe(
+          true,
+        );
+      } finally {
+        configureSellerNotificationRepository(null);
+        if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["memory", "file"] as const)(
+    "preserves an acknowledgement when a stale %s cursor advances",
+    async (backend) => {
+      const dir =
+        backend === "file"
+          ? fs.mkdtempSync(path.join(os.tmpdir(), "seller-notif-read-set-"))
+          : null;
+      const filePath = dir ? path.join(dir, "store.json") : null;
+      const repo = filePath
+        ? createFileSellerNotificationRepository(filePath)
+        : createMemorySellerNotificationRepository();
+      configureSellerNotificationRepository(repo);
+      try {
+        const events = [sale(1), sale(2, "tx-2")];
+        await appendSellerEvent(events[0]);
+        await appendSellerEvent(events[1]);
+        const staleCursor = await repo.getCursor(WALLET);
+        const readId = `notif:${events[0].eventId}`;
+        await markSellerNotificationsRead(WALLET, [readId]);
+
+        const advanced = await repo.saveCursor(
+          advanceCursorToTip(events, staleCursor, 1_700_000_000_010),
+        );
+        expect(advanced.readIds).toEqual([readId]);
+        expect(advanced.cursorEventId).toBe(events[1].eventId);
+        expect(advanced.lastLedger).toBe(2);
+        expect(advanced.updatedAt).toBe(1_700_000_000_010);
+
+        if (filePath) {
+          configureSellerNotificationRepository(
+            createFileSellerNotificationRepository(filePath),
+          );
+        }
+        const feed = await getSellerFeed(WALLET);
+        expect(feed.unreadCount).toBe(1);
+        expect(feed.cursor.readIds).toEqual([readId]);
+
+        await resetSellerNotificationStore();
+        const cleared = await getSellerFeed(WALLET);
+        expect(cleared.notifications).toEqual([]);
+        expect(cleared.cursor.readIds).toEqual([]);
+      } finally {
+        configureSellerNotificationRepository(null);
+        if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
 describe("duplicate events", () => {
   it("ignores duplicate event delivery by eventId", async () => {
     const repo = createMemorySellerNotificationRepository();

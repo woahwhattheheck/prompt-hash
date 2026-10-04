@@ -125,7 +125,12 @@ export function createFileSellerNotificationRepository(
       return withLock(lockPath, async () => {
         const shape = readShape(filePath);
         const key = normalizeWallet(state.wallet);
-        const next = { ...state, wallet: key };
+        const previousReadIds = shape.cursors[key]?.readIds ?? [];
+        const next = {
+          ...state,
+          wallet: key,
+          readIds: [...new Set([...previousReadIds, ...state.readIds])],
+        };
         shape.cursors[key] = next;
         writeShape(filePath, shape);
         return next;
