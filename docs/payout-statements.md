@@ -251,3 +251,21 @@ diagnostics because Mongoose is unavailable in the retained runtime. The same
 production check on the exact preceding source yields identical diagnostics;
 the final three-file check adds none. This is a dependency limitation, not a
 claim of a complete type-check or repository build.
+
+
+## Formula-like text in CSV exports
+
+CSV export prefixes formula-like text with an apostrophe and quotes the complete
+cell, including formula markers after leading whitespace and their full-width
+variants. Text beginning with tab, carriage return or line feed is also marked.
+Embedded delimiters, quotes and newlines remain RFC-style escaped. Monetary
+columns remain numeric, including negative carryover and net settlement values.
+This transformation applies only to the CSV presentation: stored statements,
+JSON exports and signed data are unchanged. Consumers requiring exact original
+text should use the JSON export.
+
+The initial-import text marker is not a universal spreadsheet security guarantee.
+Spreadsheet applications differ, and saving/reopening a CSV can remove escape
+characters. See OWASP's [CSV Injection guidance](https://owasp.org/www-community/attacks/CSV_Injection).
+The maintained tests exercise actual exporter bytes and the Express download
+route with the existing model mock; they do not execute Excel or LibreOffice.

@@ -15,7 +15,7 @@ jest.mock("../models/Purchase", () => ({ __esModule: true, default: { find: jest
 jest.mock("../models/Prompt", () => ({ __esModule: true, default: { find: jest.fn() } }));
 jest.mock("../models/FulfillmentRecord", () => ({ __esModule: true, default: { find: jest.fn() } }));
 jest.mock("../models/User", () => ({ __esModule: true, default: { findOne: jest.fn() } }));
-jest.mock("../models/PayoutStatement", () => ({ __esModule: true, default: { findOneAndUpdate: jest.fn() } }));
+jest.mock("../models/PayoutStatement", () => ({ __esModule: true, default: { findOneAndUpdate: jest.fn(), findOne: jest.fn() } }));
 
 import express from "express";
 import request from "supertest";
@@ -1101,5 +1101,89 @@ describe("database refund purchase lookup batching", () => {
       { promptId: "prompt-a", buyerWallet: "buyer-a" },
       { promptId: "Prompt-A", buyerWallet: "missing-buyer" },
     ] });
+  });
+});
+
+
+// Parse the emitted CSV independently of its escaping helper, including
+// embedded separators, newlines and doubled quotes.
+function readPayoutCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (quoted && text[i + 1] === '"') { value += '"'; i += 1; }
+      else quoted = !quoted;
+    } else if (!quoted && ch === ',') {
+      row.push(value); value = "";
+    } else if (!quoted && ch === '\n') {
+      row.push(value); rows.push(row); row = []; value = "";
+    } else value += ch;
+  }
+  row.push(value); rows.push(row);
+  expect(quoted).toBe(false);
+  return rows;
+}
+
+describe("CSV text cells", () => {
+  const period = { start: "2026-01-01T00:00:00.000Z", end: "2026-01-31T23:59:59.999Z" };
+  const build = (text: string) => reconcilePayoutStatement({
+    statementId: "stmt_csv_fixture",
+    sellerWallet: "GSELLER",
+    period,
+    previousBalanceCarryoverStroops: -100,
+    purchases: [{ purchaseId: text, promptId: "p1", buyerWallet: "gbuyer", grossStroops: 10_000, purchasedAt: period.start }],
+    refunds: [{ purchaseId: text, promptId: "p2", originalGrossStroops: 20_000, originalPurchasedAt: "2025-12-01T00:00:00.000Z", refundedAt: period.start }],
+    payoutAttempts: [{ attemptId: text, amountStroops: 0, status: "failed", failureReason: text, txHash: text, attemptedAt: period.end }],
+  });
+
+  it.each(['=1+2', '+1+2', '-1+2', '@SUM(1)', '\t=1+2', '\r=1+2', '\n=1+2', '  =1+2', '＝1+2', '＋1+2', '－1+2', '＠SUM(1)', '=1+2",=3+4\nnext'])
+    ("marks formula-like text as text in every section: %p", (text) => {
+      const statement = build(text);
+      const before = exportStatementToJson(statement);
+      const rows = readPayoutCsv(exportStatementToCsv(statement));
+      expect(rows.find((r) => r[0] === 'summary' && r[1] === 'failureReason')?.[2]).toBe("'" + text);
+      expect(rows.find((r) => r[0] === 'sales' && r[1] !== 'purchaseId')?.[1]).toBe("'" + text);
+      expect(rows.find((r) => r[0] === 'refunds' && r[1] !== 'purchaseId')?.[1]).toBe("'" + text);
+      const attempt = rows.find((r) => r[0] === 'payoutAttempts' && r[1] !== 'attemptId');
+      expect(attempt).toHaveLength(7);
+      expect(attempt?.[1]).toBe("'" + text);
+      expect(attempt?.[5]).toBe("'" + text);
+      expect(attempt?.[6]).toBe("'" + text);
+      expect(exportStatementToJson(statement)).toBe(before);
+      expect(statement.signature).toBe(JSON.parse(before).signature);
+    });
+
+  it("preserves ordinary text, CSV quoting, blanks and numeric negative amounts", () => {
+    for (const text of ['normal', 'ordinary =1+2', 'quoted,"value"\nnext']) {
+      const statement = build(text);
+      const rows = readPayoutCsv(exportStatementToCsv(statement));
+      expect(rows.find((r) => r[0] === 'summary' && r[1] === 'failureReason')?.[2]).toBe(text);
+      expect(rows.find((r) => r[0] === 'summary' && r[1] === 'netSettlementStroops')?.[2]).toBe('-9600');
+      expect(exportStatementToCsv(statement)).toContain('summary,previousBalanceCarryoverStroops,-100');
+    }
+    const statement = build('normal');
+    statement.failureReason = undefined;
+    expect(exportStatementToCsv(statement)).toContain('summary,failureReason,\n');
+  });
+
+  it("serves protected CSV and unchanged signed JSON through the actual export route", async () => {
+    const statement = build('=1+2');
+    const findOne = PayoutStatementModel.findOne as jest.Mock;
+    findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(statement) });
+    const app = express();
+    app.use('/api/payouts', payoutRouter);
+    const csv = await request(app).get('/api/payouts/statements/GSELLER/stmt_csv_fixture/export?format=csv');
+    expect(csv.status).toBe(200);
+    expect(csv.headers['content-type']).toMatch(/^text\/csv/);
+    expect(readPayoutCsv(csv.text).find((r) => r[0] === 'summary' && r[1] === 'failureReason')?.[2]).toBe("'=1+2");
+    const json = await request(app).get('/api/payouts/statements/GSELLER/stmt_csv_fixture/export?format=json');
+    expect(json.status).toBe(200);
+    expect(json.body).toEqual(JSON.parse(exportStatementToJson(statement)));
+    expect(json.body.failureReason).toBe('=1+2');
+    expect(findOne).toHaveBeenLastCalledWith({ sellerWallet: 'gseller', statementId: 'stmt_csv_fixture' });
   });
 });

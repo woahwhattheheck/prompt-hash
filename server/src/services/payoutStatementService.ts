@@ -297,10 +297,15 @@ export function reconcilePayoutStatement(
 export function exportStatementToCsv(statement: PayoutStatement): string {
   const escape = (value: string | number | undefined): string => {
     const raw = value === undefined || value === null ? "" : String(value);
-    if (/[",\n\r]/.test(raw)) {
-      return `"${raw.replace(/"/g, '""')}"`;
+    // Quoting alone does not stop spreadsheet formula interpretation. Keep
+    // amounts numeric; only potentially executable textual cells are marked.
+    const prefix = typeof value === "string" &&
+      (/^\s*[=+\-@＝＋－＠]/u.test(raw) || /^[\t\r\n]/.test(raw));
+    const text = prefix ? `'${raw}` : raw;
+    if (prefix || /[",\n\r]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
     }
-    return raw;
+    return text;
   };
 
   const lines: string[] = [];
