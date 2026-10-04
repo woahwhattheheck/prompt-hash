@@ -4,7 +4,7 @@ import {
   diffListingTerms,
   ListingTermsChangedError,
   type ListingQuote,
-} from "@/lib/auth/listingTerms";
+} from "@/lib/auth/listingTermsShared";
 
 type SignMessageFn = (
   _message: string,

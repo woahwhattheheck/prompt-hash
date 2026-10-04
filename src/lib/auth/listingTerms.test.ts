@@ -13,6 +13,7 @@ import {
   type ListingTerms,
 } from "./listingTerms";
 import { resolveListingQuote } from "./resolveListingQuote";
+import * as sharedListingTerms from "./listingTermsShared";
 
 const { findPromptById, findPromptByChainId, findUserById } = vi.hoisted(() => ({
   findPromptById: vi.fn(),
@@ -49,6 +50,15 @@ const baseTerms = (): ListingTerms => ({
 });
 
 describe("listingTerms (#239)", () => {
+  it("preserves the error identity across client and server imports", () => {
+    const quote = toListingQuote({ ...baseTerms(), priceStroops: "90000000" });
+    const changes = sharedListingTerms.diffListingTerms(baseTerms(), quote);
+    const error = new sharedListingTerms.ListingTermsChangedError(changes, quote);
+    expect(error).toBeInstanceOf(ListingTermsChangedError);
+    expect(error).toMatchObject({ code: "TERMS_CHANGED", changes: ["price"], quote });
+    expect(error.message).toBe(formatTermsChangeMessage(changes));
+  });
+
   it("hashes canonical terms stably and case-normalizes seller", () => {
     const a = baseTerms();
     const b = { ...baseTerms(), seller: a.seller.toLowerCase() };
