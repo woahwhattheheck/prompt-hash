@@ -115,7 +115,8 @@ export function verifyPolicySnapshot(
       (parsed.decision === "deny" &&
         parsed.denyReason !== "refund_requested" &&
         parsed.denyReason !== "refunded") ||
-      typeof parsed.evaluatedAt !== "number"
+      typeof parsed.evaluatedAt !== "number" ||
+      !Number.isFinite(parsed.evaluatedAt)
     ) {
       return null;
     }
@@ -276,6 +277,11 @@ function tryCache(
     snapshot.promptId !== String(promptId) ||
     snapshot.buyerWallet.toLowerCase() !== buyerWallet.toLowerCase()
   ) {
+    cache.delete(promptId, buyerWallet);
+    return null;
+  }
+  if (snapshot.evaluatedAt > now) {
+    // A clock rollback must not extend a snapshot's freshness window.
     cache.delete(promptId, buyerWallet);
     return null;
   }

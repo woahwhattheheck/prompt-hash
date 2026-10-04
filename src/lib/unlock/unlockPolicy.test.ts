@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { createHmac } from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DENY_MESSAGES,
@@ -569,6 +570,117 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
         buyerWallet: BUYER.toLowerCase(),
       });
       expect(cache.get(PROMPT_ID, BUYER)).toBe(token);
+    },
+  );
+
+
+  it.each(["delivered", "refunded"])(
+    "discards a future-dated %s snapshot after clock rollback",
+    async (status) => {
+      const options = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        signingSecret: SECRET,
+        cache,
+      };
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now: now + 60_000,
+        findFulfillment: async () => ({ status }),
+      });
+      const unavailable = async () => {
+        throw new Error("connection error");
+      };
+
+      expect(
+        await evaluateUnlockFulfillmentPolicy({
+          ...options,
+          now,
+          findFulfillment: unavailable,
+        }),
+      ).toMatchObject({
+        outcome: "unavailable",
+        message: POLICY_UNAVAILABLE_MESSAGE,
+      });
+      expect(cache.get(PROMPT_ID, BUYER)).toBeUndefined();
+
+      // Catching up must not revive the discarded snapshot during the outage.
+      expect(
+        (
+          await evaluateUnlockFulfillmentPolicy({
+            ...options,
+            now: now + 60_001,
+            findFulfillment: unavailable,
+          })
+        ).outcome,
+      ).toBe("unavailable");
+    },
+  );
+
+  it.each(["1e309", "-1e309"])(
+    "rejects a correctly signed snapshot with nonfinite timestamp %s",
+    async (timestamp) => {
+      const body = JSON.stringify({
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER.toLowerCase(),
+        decision: "allow",
+        status: "delivered",
+        evaluatedAt: 0,
+      }).replace('"evaluatedAt":0', `"evaluatedAt":${timestamp}`);
+      const signature = createHmac("sha256", SECRET)
+        .update(body)
+        .digest("base64url");
+      const token = `${Buffer.from(body).toString("base64url")}.${signature}`;
+      cache.set(PROMPT_ID, BUYER, token);
+
+      expect(verifyPolicySnapshot(token, SECRET)).toBeNull();
+      expect(
+        (
+          await evaluateUnlockFulfillmentPolicy({
+            promptId: PROMPT_ID,
+            buyerWallet: BUYER,
+            signingSecret: SECRET,
+            cache,
+            now,
+            findFulfillment: async () => {
+              throw new Error("connection error");
+            },
+          })
+        ).outcome,
+      ).toBe("unavailable");
+      expect(cache.get(PROMPT_ID, BUYER)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { age: 0, outcome: "allow" },
+    { age: DEFAULT_POLICY_CACHE_TTL_MS, outcome: "allow" },
+    { age: DEFAULT_POLICY_CACHE_TTL_MS + 1, outcome: "unavailable" },
+  ])(
+    "preserves the freshness boundary at age $age ms",
+    async ({ age, outcome }) => {
+      const options = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        signingSecret: SECRET,
+        cache,
+      };
+      await evaluateUnlockFulfillmentPolicy({
+        ...options,
+        now,
+        findFulfillment: async () => ({ status: "delivered" }),
+      });
+      expect(
+        (
+          await evaluateUnlockFulfillmentPolicy({
+            ...options,
+            now: now + age,
+            findFulfillment: async () => {
+              throw new Error("connection error");
+            },
+          })
+        ).outcome,
+      ).toBe(outcome);
     },
   );
 
