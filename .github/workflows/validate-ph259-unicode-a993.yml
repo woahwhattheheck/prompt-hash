@@ -1,0 +1,67 @@
+name: PH259 focused Unicode similarity acceptance
+
+on:
+  push:
+    branches: [validation/ph259-unicode-a993]
+
+permissions:
+  contents: read
+
+jobs:
+  similarity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 2c80a2ca04d36a5c99b1cbf6da2d02df1a982fcd
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Assert exact source and existing dependency configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "2c80a2ca04d36a5c99b1cbf6da2d02df1a982fcd"
+          test "$(git rev-parse HEAD:server/src/services/similarityDetection.ts)" = "d2a01e5753a2f622a968f2db7942c1212504394c"
+          test "$(git rev-parse HEAD:src/test/similarityDetection.test.ts)" = "13daacdfd9456edfe42d27e566f995a65d0d7156"
+          test "$(git rev-parse HEAD:package.json)" = "5cc0f2faf2d74a4ffe9b895304aadb0ec296c45e"
+          test "$(git rev-parse HEAD:yarn.lock)" = "a020c0b219fa1ce26b532bae7d9c5cf58454aceb"
+          test "$(git rev-parse HEAD:server/package.json)" = "342494b72b6b8856190b94294fea533b685aa6b9"
+          test "$(git rev-parse HEAD:server/package-lock.json)" = "d14744077fc3062bbfca4787950f95adcdc81208"
+          test "$(git rev-parse HEAD:vitest.similarity.config.mjs)" = "b9d8b17f003480086373354be52bf7cf00962af8"
+          mkdir -p validation-output
+          git rev-parse HEAD > validation-output/source-sha.txt
+          sha256sum package.json package-lock.json yarn.lock server/package.json server/package-lock.json vitest.similarity.config.mjs src/test/similarityDetection.test.ts src/test/similarityOverride.test.ts server/src/services/similarityDetection.ts > validation-output/source-and-lock-sha256.txt
+      - name: Install root dependencies from existing Yarn v1 lock
+        shell: bash
+        env:
+          HUSKY: '0'
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+          yarn install --frozen-lockfile --non-interactive
+      - name: Install existing server dependencies
+        run: npm ci --prefix server
+      - name: Record runtime and confirm unchanged source and lock files
+        shell: bash
+        run: |
+          set -euo pipefail
+          { node --version; npm --version; yarn --version; } | tee validation-output/runtime.txt
+          sha256sum --check validation-output/source-and-lock-sha256.txt
+          git diff --exit-code -- package.json package-lock.json yarn.lock server/package.json server/package-lock.json vitest.similarity.config.mjs src/test/similarityDetection.test.ts src/test/similarityOverride.test.ts server/src/services/similarityDetection.ts
+      - name: Run existing focused similarity selection once
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:similarity -- --maxWorkers=1 --no-file-parallelism 2>&1 | tee validation-output/similarity.log
+      - name: Save focused execution receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ph259-unicode-similarity-a993
+          path: validation-output/
+          retention-days: 7
+          if-no-files-found: error
