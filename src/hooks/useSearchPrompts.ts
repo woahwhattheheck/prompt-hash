@@ -1,7 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { xlmToStroops } from "@/lib/stellar/format";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
-import { xlmBoundToStroops, sortPromptsBy } from "@/lib/prompts/promptOrdering";
+import {
+  xlmBoundToStroops,
+  xlmFilterBoundToStroops,
+  sortPromptsBy,
+} from "@/lib/prompts/promptOrdering";
 
 interface SearchFilters {
   query?: string;
@@ -136,9 +140,13 @@ export function useSearchPrompts(filters: SearchFilters, enabled = true) {
 
         if (minPrice !== undefined || maxPrice !== undefined) {
           const minStroops =
-            minPrice === undefined ? undefined : xlmBoundToStroops(minPrice);
+            minPrice === undefined
+              ? undefined
+              : xlmFilterBoundToStroops(minPrice, "min");
           const maxStroops =
-            maxPrice === undefined ? undefined : xlmBoundToStroops(maxPrice);
+            maxPrice === undefined
+              ? undefined
+              : xlmFilterBoundToStroops(maxPrice, "max");
           filtered = filtered.filter(
             (p) =>
               (minStroops === undefined || p.priceStroops >= minStroops) &&
