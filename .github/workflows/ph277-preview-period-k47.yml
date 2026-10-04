@@ -1,0 +1,70 @@
+name: PH277 preview period lifecycle
+
+on:
+  push:
+    branches: [validation/ph277-preview-period-k47]
+    paths: [.github/workflows/ph277-preview-period-k47.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ph277-preview-period-k47
+  cancel-in-progress: false
+
+jobs:
+  component:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI: true
+      COREPACK_ENABLE_AUTO_PIN: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 49acf7f16340436851d5c8094ddf81e5ccaf8b52
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install unchanged project dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          git rev-parse HEAD HEAD^{tree} > evidence/source.txt
+          git hash-object package.json yarn.lock src/components/profile/PayoutStatementsCard.tsx src/components/profile/PayoutStatementsCard.test.tsx >> evidence/source.txt
+          corepack enable
+          corepack prepare yarn@4.9.2 --activate
+          yarn install --immutable 2>&1 | tee evidence/install.log
+          { node --version; yarn --version; yarn node -e 'for (const p of ["react", "react-dom", "vitest", "jsdom", "typescript"]) console.log(p, require(p + "/package.json").version)'; } > evidence/versions.txt
+          git diff --exit-code -- package.json yarn.lock
+      - name: Reproduce the three lifecycle failures on the original component
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show e65d1c6dac3b33f2b1cd23c704132d44381e1406:src/components/profile/PayoutStatementsCard.tsx > src/components/profile/PayoutStatementsCard.tsx
+          git hash-object src/components/profile/PayoutStatementsCard.tsx > evidence/baseline-blob.txt
+          set +e
+          yarn vitest run src/components/profile/PayoutStatementsCard.test.tsx -t 'invalidates the period preview|locks period edits' --reporter=json --outputFile=evidence/baseline.json > evidence/baseline.log 2>&1
+          code=$?
+          set -e
+          printf '%s\n' "$code" > evidence/baseline-exit.txt
+          git checkout 49acf7f16340436851d5c8094ddf81e5ccaf8b52 -- src/components/profile/PayoutStatementsCard.tsx
+          node -e 'const r=require("./evidence/baseline.json"); if (r.numFailedTests!==3 || r.numPassedTests!==0) throw new Error("Expected the three targeted baseline failures, not an infrastructure error");'
+          test "$code" -ne 0
+      - name: Run the maintained component file on the candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          yarn vitest run src/components/profile/PayoutStatementsCard.test.tsx --reporter=json --outputFile=evidence/candidate.json > evidence/candidate.log 2>&1
+          node -e 'const r=require("./evidence/candidate.json"); if (r.numFailedTests!==0 || r.numPassedTests!==13) throw new Error("Expected all 13 maintained component cases to pass");'
+          git diff --exit-code -- src/components/profile/PayoutStatementsCard.tsx src/components/profile/PayoutStatementsCard.test.tsx package.json yarn.lock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ph277-preview-period-k47-49acf7f
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error
