@@ -488,6 +488,90 @@ describe("unlock fulfillment policy fail-closed (#166)", () => {
     },
   );
 
+  it.each([
+    { label: "omitted", reason: undefined },
+    { label: "null", reason: null },
+    { label: "empty", reason: "" },
+    { label: "unsupported", reason: "delivered" },
+    { label: "object", reason: { reason: "refunded" } },
+    { label: "array", reason: ["refunded"] },
+  ])(
+    "rejects malformed signed denial snapshots with $label reason",
+    async ({ reason }) => {
+      const payload: PolicySnapshotPayload = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        decision: "deny",
+        status: "refunded",
+        evaluatedAt: now,
+      };
+      if (reason !== undefined) {
+        payload.denyReason = reason as PolicySnapshotPayload["denyReason"];
+      }
+      const token = signPolicySnapshot(payload, SECRET);
+      cache.set(PROMPT_ID, BUYER, token);
+
+      const decision = await evaluateUnlockFulfillmentPolicy({
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        findFulfillment: async () => {
+          throw new Error("connection error");
+        },
+        signingSecret: SECRET,
+        cache,
+        now: now + 1_000,
+      });
+
+      expect(decision).toEqual({
+        outcome: "unavailable",
+        message: POLICY_UNAVAILABLE_MESSAGE,
+        cause: "connection error",
+      });
+      expect(verifyPolicySnapshot(token, SECRET)).toBeNull();
+      expect(cache.get(PROMPT_ID, BUYER)).toBeUndefined();
+    },
+  );
+
+  it.each(["refund_requested", "refunded"] as const)(
+    "preserves a valid signed %s denial during an outage",
+    async (reason) => {
+      const payload: PolicySnapshotPayload = {
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        decision: "deny",
+        status: reason,
+        denyReason: reason,
+        evaluatedAt: now,
+      };
+      const token = signPolicySnapshot(payload, SECRET);
+      cache.set(PROMPT_ID, BUYER, token);
+
+      const decision = await evaluateUnlockFulfillmentPolicy({
+        promptId: PROMPT_ID,
+        buyerWallet: BUYER,
+        findFulfillment: async () => {
+          throw new Error("connection error");
+        },
+        signingSecret: SECRET,
+        cache,
+        now: now + 1_000,
+      });
+
+      expect(decision).toEqual({
+        outcome: "deny",
+        reason,
+        message: DENY_MESSAGES[reason],
+        status: reason,
+        source: "cache",
+      });
+      expect(verifyPolicySnapshot(token, SECRET)).toMatchObject({
+        ...payload,
+        buyerWallet: BUYER.toLowerCase(),
+      });
+      expect(cache.get(PROMPT_ID, BUYER)).toBe(token);
+    },
+  );
+
   it("rejects tampered cache signatures", () => {
     const payload: PolicySnapshotPayload = {
       promptId: PROMPT_ID,

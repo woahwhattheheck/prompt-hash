@@ -12,7 +12,7 @@ Lookup failures **never** continue to decryption (fail closed).
 
 ## Signed policy snapshot
 
-After a successful live evaluation, an HMAC-signed snapshot is cached (~30s TTL) using the challenge token secret. During a brief outage, only a **fresh, validly signed** snapshot may satisfy the gate. Missing, stale, or tampered cache → unavailable.
+After a successful live evaluation, an HMAC-signed snapshot is cached (~30s TTL) using the challenge token secret. During a brief outage, only a **fresh, validly signed** snapshot may satisfy the gate. Missing, stale, tampered, or malformed cache → unavailable. A signed `decision: "deny"` snapshot must include `denyReason: "refund_requested"` or `denyReason: "refunded"`. A missing or unsupported denial reason invalidates and evicts that snapshot; it cannot become an allow result. Signing alone does not establish a valid negative snapshot. Valid allow snapshots and supported denial messages are unchanged.
 
 ### Concurrent lookups
 

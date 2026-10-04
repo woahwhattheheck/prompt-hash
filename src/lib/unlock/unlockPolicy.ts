@@ -112,6 +112,9 @@ export function verifyPolicySnapshot(
       typeof parsed.promptId !== "string" ||
       typeof parsed.buyerWallet !== "string" ||
       (parsed.decision !== "allow" && parsed.decision !== "deny") ||
+      (parsed.decision === "deny" &&
+        parsed.denyReason !== "refund_requested" &&
+        parsed.denyReason !== "refunded") ||
       typeof parsed.evaluatedAt !== "number"
     ) {
       return null;
