@@ -265,6 +265,30 @@ describe("unsupported versions fail safely (dead-letter)", () => {
   }
 
   it.each([
+    ["publish.v1.json", "creator", 123],
+    ["publish.v1.json", "asset", false],
+    ["purchase.v1.json", "buyer", 42],
+    ["purchase.v1.json", "creator", true],
+    ["unlock.v1.json", "buyer", 0],
+  ] as const)(
+    "%s: required Address field %s rejects non-string primitive",
+    (file, field, value) => {
+      const fixture = loadFixture(file);
+      fixture.value = { ...fixture.value, [field]: value };
+
+      const result = decodeEvent(fixture, { now: fixedNow });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+
+      expect(result.deadLetter.reason).toBe("SCHEMA_VALIDATION_FAILED");
+      expect(result.deadLetter.message).toContain(field);
+      expect(result.deadLetter.lifecycle).toBe(fixture.lifecycle);
+      expect(result.deadLetter.contractEvent).toBe(fixture.contractEvent);
+      expect(result.deadLetter.raw).toBe(fixture);
+    },
+  );
+
+  it.each([
     ["empty string", "", null],
     ["zero number", 0, "0"],
     ["bigint", BigInt(42), "42"],
