@@ -358,6 +358,45 @@ describe("buildCreatorFeedback", () => {
 });
 
 describe("evaluatePublishSimilarity — allow / review / block", () => {
+  it("blocks identical long Unicode drafts instead of discarding their content", () => {
+    const drafts = [
+      "Напиши подробный рассказ о путешествии исследователей через горы и леса. Опиши природу, дружбу, открытия и возвращение домой.",
+      "اكتب قصة مفصلة عن رحلة العلماء عبر الجبال والغابات واكتشاف الطبيعة والصداقة والعودة إلى المنزل بعد نجاح المغامرة.",
+      "山と森を旅する研究者たちの物語を書いてください。自然の美しさと友情と発見を詳しく描写して、冒険を終えて家に帰る場面で物語を締めくくってください。",
+      "𐐀𐐁𐐂 ".repeat(20),
+    ];
+    for (const content of drafts) {
+      expect(content.trim().length).toBeGreaterThanOrEqual(50);
+      const result = evaluatePublishSimilarity(content, [
+        { onChainId: "unicode-original", content },
+      ]);
+      expect(result.score).toBeCloseTo(1);
+      expect(result.decision).toBe("block");
+      expect(result.similarTo).toBe("unicode-original");
+      expect(result.feedback.decision).toBe("block");
+    }
+  });
+
+  it("retains Unicode bodies and combining marks when distinguishing unrelated drafts", () => {
+    const russian =
+      "Напиши подробный рассказ о путешествии исследователей через горы и леса. Опиши природу, дружбу, открытия и возвращение домой.";
+    const arabic =
+      "اكتب قصة مفصلة عن رحلة العلماء عبر الجبال والغابات واكتشاف الطبيعة والصداقة والعودة إلى المنزل بعد نجاح المغامرة.";
+    const unrelated = evaluatePublishSimilarity(`Prompt Guide ${russian}`, [
+      { onChainId: "other-language", title: "Prompt Guide", content: arabic },
+    ]);
+    expect(unrelated.score).toBeLessThan(PUBLICATION_THRESHOLDS.REVIEW);
+    expect(unrelated.decision).toBe("allow");
+    expect(unrelated.similarTo).toBeNull();
+
+    // Dropping vowel marks would collapse these distinct words to the same token.
+    const marked = evaluatePublishSimilarity("का ".repeat(20), [
+      { onChainId: "different-vowel", content: "कि ".repeat(20) },
+    ]);
+    expect(marked.score).toBe(0);
+    expect(marked.decision).toBe("allow");
+  });
+
   it("allows unrelated drafts", () => {
     const result = evaluatePublishSimilarity(
       "Write a Python script that scrapes stock prices from Yahoo Finance and emails a daily summary.",
