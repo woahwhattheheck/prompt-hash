@@ -256,8 +256,15 @@ export function decodeEvent(
   }
 
   // Required values must remain present after primitive normalization.
+  // Contract IDs (u64) and stroop amounts (i128) are integers. JSON Numbers
+  // outside the safe integer range may already be rounded; use strings or
+  // bigint for larger exact values rather than canonicalizing corrupted data.
   const invalidRequired = required.filter(
-    (key) => asString(merged[key]) === null,
+    (key) =>
+      asString(merged[key]) === null ||
+      ((key === "prompt_id" || key === "price_stroops") &&
+        typeof merged[key] === "number" &&
+        !Number.isSafeInteger(merged[key])),
   );
   if (invalidRequired.length > 0) {
     return finish(
