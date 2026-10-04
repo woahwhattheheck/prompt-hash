@@ -1,0 +1,112 @@
+name: PH276 integer expectation reconciliation
+on:
+  push:
+    branches: [validation/ph276-integer-expectations-quarry-c6f2]
+permissions:
+  contents: read
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: woahwhattheheck/prompt-hash
+          ref: a0f8305b4e7335014cab9ddcb9580a6fcb58dce6
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Record exact source and environment
+        run: |
+          mkdir -p evidence
+          git -C source rev-parse HEAD > evidence/source.txt
+          node --version > evidence/node.txt
+          npm --version > evidence/npm.txt
+          cp source/server/src/tests/eventDecoder.test.ts evidence/eventDecoder.before.test.ts
+          git -C source hash-object server/src/tests/eventDecoder.test.ts > evidence/before-blob.txt
+      - name: Install the unchanged locked server dependencies
+        working-directory: source/server
+        env:
+          CI: 'true'
+        run: npm ci --no-audit --no-fund 2>&1 | tee ../../evidence/install.log
+      - name: Execute original maintained decoder file
+        working-directory: source/server
+        env:
+          CI: 'true'
+        run: |
+          set +e
+          ./node_modules/.bin/jest --runTestsByPath src/tests/eventDecoder.test.ts --runInBand --json --outputFile=../../evidence/before.json > ../../evidence/before.log 2>&1
+          echo $? > ../../evidence/before-exit.txt
+          exit 0
+      - name: Reconcile only the two stale integer expectations
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p = Path('source/server/src/tests/eventDecoder.test.ts')
+          data = p.read_bytes()
+          blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          assert blob == 'cd89ac9b0e5a52d24073f8a5b1778c91803b050f', blob
+          text = data.decode()
+          start = text.index('  it.each([\n    ["empty string"')
+          end = text.index('\n  it.each([', start + 12)
+          before = text[start:end]
+          changes = {
+              '["empty string", "", ""]': '["empty string", "", null]',
+              '["false boolean", false, "false"]': '["false boolean", false, null]',
+              'required prompt_id preserves %s normalization': 'required prompt_id enforces exact integer admission for %s',
+              'expect(result.ok).toBe(true);': 'expect(result.ok).toBe(expected !== null);',
+              'if (!result.ok) return;': '''if (!result.ok) {
+                  expect(expected).toBeNull();
+                  expect(result.deadLetter.reason).toBe("SCHEMA_VALIDATION_FAILED");
+                  expect(result.deadLetter.message).toContain("prompt_id");
+                  expect(result.deadLetter.raw).toBe(fixture);
+                  return;
+                }'''.replace('                ', '      '),
+          }
+          after = before
+          for old, new in changes.items():
+              assert after.count(old) == 1, old
+              after = after.replace(old, new)
+          p.write_text(text[:start] + after + text[end:])
+          Path('evidence/eventDecoder.test.ts').write_bytes(p.read_bytes())
+          PY
+          git -C source diff -- server/src/tests/eventDecoder.test.ts > evidence/repair.patch
+          git -C source hash-object server/src/tests/eventDecoder.test.ts > evidence/after-blob.txt
+      - name: Execute repaired maintained decoder file
+        working-directory: source/server
+        env:
+          CI: 'true'
+        run: |
+          set +e
+          ./node_modules/.bin/jest --runTestsByPath src/tests/eventDecoder.test.ts --runInBand --json --outputFile=../../evidence/after.json > ../../evidence/after.log 2>&1
+          echo $? > ../../evidence/after-exit.txt
+          exit 0
+      - name: Require actual before and after results
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          before = json.loads(Path('evidence/before.json').read_text())
+          after = json.loads(Path('evidence/after.json').read_text())
+          summary = {'before': {k: before[k] for k in ['numTotalTests','numPassedTests','numFailedTests','numPendingTests']}, 'after': {k: after[k] for k in ['numTotalTests','numPassedTests','numFailedTests','numPendingTests']}}
+          summary['original_failures'] = [a['fullName'] for f in before['testResults'] for a in f['assertionResults'] if a['status'] == 'failed']
+          Path('evidence/summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+          assert before['numFailedTests'] == 2, 'Original file did not reproduce exactly the two recorded stale expectations'
+          assert any('empty string' in name for name in summary['original_failures'])
+          assert any('false boolean' in name for name in summary['original_failures'])
+          assert after['numTotalTests'] == before['numTotalTests'] > 0
+          assert after['success'] and after['numFailedTests'] == 0 and after['numPendingTests'] == 0
+          assert Path('evidence/after-exit.txt').read_text().strip() == '0'
+          PY
+      - name: Retain source, patch and native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ph276-integer-expectations-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 7
