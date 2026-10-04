@@ -87,12 +87,14 @@ export async function getBuyerVersion(
   }
 
   const version = await deps.findVersion(promptId, purchase.versionIndex);
-  const prompt = await deps.findPromptById(promptId);
+  // Read the current prompt only when historical content needs legacy fallback.
+  const content =
+    version?.content ?? (await deps.findPromptById(promptId))?.content ?? null;
 
   return ok({
     versionIndex: purchase.versionIndex,
     changeNote: version?.changeNote ?? "",
-    content: version?.content ?? prompt?.content ?? null,
+    content,
     purchasedAt: purchase.createdAt ?? null,
   });
 }

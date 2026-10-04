@@ -113,6 +113,36 @@ and [base 14.1.0 rejects noncanonical StrKey encoding](https://github.com/stella
 This is retained-runtime execution plus pinned-source confirmation; an exact
 SDK 14.6.1 runtime was not installed or executed for this follow-through.
 
+## Buyer-version lookup
+
+Once purchase entitlement and a version with non-nullish content are found,
+the shared buyer-version domain returns that content without fetching the
+current prompt. This includes an empty string, which is valid stored content.
+The normal path therefore performs two dependency reads (purchase and version),
+instead of three; `createPromptVersioningDeps` maps the removed third read to
+`Prompt.findById(...).lean()`. A failure of that unnecessary current-prompt read
+can no longer prevent delivery of an already-loaded purchased version.
+
+Missing version records and null or absent version content still use exactly
+one current-prompt fallback read. If that prompt is absent, content remains
+`null`. Purchase entitlement, version index, change note and purchase timestamp
+remain unchanged across the domain function and HTTP dispatcher.
+
+The maintained prompt-versioning contract selection reproduces two failures
+on `e92cb1a815a45a68ed191aa11342a47070b01a50` with the current-prompt dependency
+unavailable, then passes all ten selected cases after the repair; the twelve
+webhook cases are outside this selection. The command is
+`npm run test:api-domain-contract -- -t 'prompt versioning contract'`.
+Execution used Node 24.19.0 and retained Vitest 4.1.10, with the checked-in
+API-domain configuration and in-memory dependencies. The query counts are
+observed at that dependency boundary; this is not a live MongoDB, deployed
+HTTP-adapter, latency or production-throughput benchmark. No dependencies or
+lockfiles changed.
+
+Prettier 3.9.6 reports the changed ranges already formatted. Scoped ESLint
+could not load the retained runtime's missing `typescript-eslint` package;
+no fresh lint pass is claimed for this follow-through.
+
 ## Tests
 
 ```bash
@@ -124,7 +154,10 @@ Cross-adapter fixtures cover purchase entitlement, publish ownership,
 idempotent purchase recording, webhook auth/SSRF, persisted signing-secret
 rotation, and auth/error parity.
 
-### Canonical-key follow-through results
+### Canonical-key follow-through results (earlier source)
+
+These results are retained from `e92cb1a815a45a68ed191aa11342a47070b01a50`;
+they were not rerun for the buyer-version lookup repair.
 
 - The configured API-domain selection passes **19 tests**, including six new
   real-signature cases. The four success cases cover both adapter paths and

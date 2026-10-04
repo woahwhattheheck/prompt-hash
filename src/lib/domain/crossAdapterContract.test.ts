@@ -174,18 +174,86 @@ describe("prompt versioning contract", () => {
     expect(result.body).toEqual({ error: "No purchase record found." });
   });
 
-  it("returns entitled version content", async () => {
-    const result = await getBuyerVersion(makeVersionDeps(), {
-      promptId: "p1",
-      buyerWallet: "gbuyer",
-    });
-    expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({
-      versionIndex: 2,
-      content: "v2-body",
-      changeNote: "n2",
-    });
-  });
+  it.each(["domain", "HTTP dispatcher"] as const)(
+    "%s returns entitled content without a current-prompt lookup",
+    async (adapter) => {
+      for (const content of ["v2-body", ""]) {
+        const findPromptById = vi.fn(async () => {
+          throw new Error("Current-prompt lookup unavailable");
+        });
+        const deps = makeVersionDeps({
+          findVersion: async () => ({
+            versionIndex: 2,
+            content,
+            changeNote: "n2",
+          }),
+          findPromptById,
+        });
+        const findPurchase = vi.spyOn(deps, "findPurchase");
+        const findVersion = vi.spyOn(deps, "findVersion");
+        const input = { promptId: "p1", buyerWallet: "gbuyer" };
+        const result =
+          adapter === "domain"
+            ? await getBuyerVersion(deps, input)
+            : await handlePromptVersionHttp(deps, {
+                method: "GET",
+                query: input,
+              });
+
+        expect(result).toEqual({
+          status: 200,
+          body: {
+            versionIndex: 2,
+            content,
+            changeNote: "n2",
+            purchasedAt: new Date("2026-01-01T00:00:00Z"),
+          },
+        });
+        expect(findPurchase).toHaveBeenCalledOnce();
+        expect(findVersion).toHaveBeenCalledOnce();
+        expect(findPromptById).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["domain", "HTTP dispatcher"] as const)(
+    "%s preserves the current-prompt fallback for missing version content",
+    async (adapter) => {
+      for (const version of [
+        null,
+        { versionIndex: 2 },
+        { versionIndex: 2, content: null },
+      ]) {
+        for (const prompt of [{ _id: "p1", content: "legacy-body" }, null]) {
+          const findPromptById = vi.fn(async () => prompt);
+          const deps = makeVersionDeps({
+            findVersion: async () => version,
+            findPromptById,
+          });
+          const input = { promptId: "p1", buyerWallet: "gbuyer" };
+          const result =
+            adapter === "domain"
+              ? await getBuyerVersion(deps, input)
+              : await handlePromptVersionHttp(deps, {
+                  method: "GET",
+                  query: input,
+                });
+
+          expect(result).toEqual({
+            status: 200,
+            body: {
+              versionIndex: 2,
+              content: prompt?.content ?? null,
+              changeNote: "",
+              purchasedAt: new Date("2026-01-01T00:00:00Z"),
+            },
+          });
+          expect(findPromptById).toHaveBeenCalledOnce();
+          expect(findPromptById).toHaveBeenCalledWith("p1");
+        }
+      }
+    },
+  );
 
   it("rejects publish for unknown user", async () => {
     const result = await publishPromptVersionForOwner(makeVersionDeps(), {
