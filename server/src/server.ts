@@ -1,6 +1,10 @@
 import "dotenv/config";
 import * as Sentry from "@sentry/node";
 import express, { type Express } from "express";
+import mongoose from "mongoose";
+import connectDb from "./db/connectDb";
+import { drainCriticalAuditOutbox } from "./services/durableAuditQueue";
+import { startDurableAuditWorker } from "./services/durableAuditWorker";
 import { TestPromptProxy } from "./controllers/controllers";
 import { proxyrouter } from "./routes/proxyRoutes";
 import { promptRouter } from "./routes/promptRoutes";
@@ -128,7 +132,15 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   return res.status(500).json({ error: "Internal server error" });
 });
 
-app.listen(port, () => {
+let stopAuditWorker: () => Promise<void> = async () => {};
+let shuttingDown = false;
+const httpServer = app.listen(port, () => {
+  if (!shuttingDown) {
+    stopAuditWorker = startDurableAuditWorker(async () => {
+      await connectDb();
+      await drainCriticalAuditOutbox();
+    });
+  }
   console.log(`Listening on port ${port}`);
 
   // STARTS THE INDEXER HERE
@@ -139,3 +151,24 @@ app.listen(port, () => {
   // Backups are scheduled only by backup.crontab. runBackup itself also takes a
   // MongoDB lease, so overlapping cron/container invocations cannot run twice.
 });
+
+httpServer.once("close", () => {
+  void stopAuditWorker()
+    .then(() => mongoose.disconnect())
+    .catch(() => {
+      console.error("[audit-outbox] shutdown failed");
+      process.exitCode = 1;
+    });
+});
+
+function shutdown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Stop new polls immediately; the close handler awaits the active drain and
+  // existing HTTP requests before disconnecting their shared Mongo connection.
+  void stopAuditWorker();
+  httpServer.close();
+}
+
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);

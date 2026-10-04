@@ -28,7 +28,7 @@ Optional degraded mode — set `AUDIT_DEGRADED_MODE=1`. Unlock may complete with
 
 ## Drain / retry / DLQ / backpressure
 
-The current unlock handler starts `drainCriticalAuditOutbox(5)` without awaiting it after acceptance. This is a best-effort request-triggered drain. The adapter exports a drain function with a default limit of 50, but `server/src/server.ts` and the package scripts do not start a periodic outbox worker. Restarting that server alone does not invoke the drain. A completed response does not guarantee completion of its detached work, especially when a serverless invocation ends.
+The unlock handler retains its best-effort `drainCriticalAuditOutbox(5)` call after acceptance. The long-lived `server/src/server.ts` process also starts an independent recovery worker when its HTTP listener starts. The worker connects through the existing Mongo helper, immediately drains up to 50 due rows, then waits one second after that call settles before polling again. Accepted rows and due retries therefore resume after a server restart without requiring another unlock request. A standalone serverless unlock invocation still does not guarantee completion of detached work; run the long-lived server against the same outbox for independent recovery.
 
 - A drain atomically claims one due `accepted` row or an abandoned `draining` row. It sets a fresh lease token and deadline, writes to `AuditLog`, then marks the row `drained`. A live, unexpired claim is excluded from other drainers.
 - An expired claim can be reclaimed by a later drain call. A completion, retry or dead-letter update must match the current claim token; a superseded worker cannot alter the replacement claim or increment its own completion counters. The default lease is 30 seconds, configurable with `AUDIT_OUTBOX_LEASE_MS`.
@@ -53,7 +53,15 @@ Recovery depends on the stored state:
 
 Before deploying recovery, ensure the acceptance-ID unique index exists. The adapter awaits model initialization when Mongoose manages indexes; deployments with `autoIndex` disabled must provision the declared index themselves. Stop or finish older workers before relying on token fencing, because their acknowledgement code does not include the token. A legacy `draining` row with missing or null lease metadata is eligible for reclamation. If an older worker had already written a destination record without an acceptance ID, the new index cannot identify that historical delivery; inspect those legacy states before rollout to avoid a duplicate historical log.
 
-Lease expiry does not schedule work. A later drain invocation is still required, and the application does not supply a periodic worker. This repair does not serialize concurrent hash-chain appends or change the count-then-insert capacity check.
+Lease expiry makes a row eligible for a later drain; the server recovery worker supplies those invocations while it is running. Each process runs only one worker drain at a time, and existing Mongo claims coordinate separate processes and request-triggered drains. This does not serialize concurrent hash-chain appends or change the count-then-insert capacity check.
+
+## Recovery worker lifecycle
+
+Connection and drain failures leave polling active. The worker logs an outage once and retries through the existing connection helper, which clears failed connection promises. A slow call settles before the next one starts; the one-second interval is not an individual Mongo-operation timeout. Existing row retry deadlines and lease expiry remain authoritative.
+
+On `SIGINT` or `SIGTERM`, the server stops new polls and closes its HTTP listener. It waits for active requests and the current drain before disconnecting the shared Mongo connection. A forced process termination can still interrupt a claim; the next process recovers it through the existing lease mechanism. Closing the HTTP server programmatically also stops the worker and closes the connection.
+
+A focused local lifecycle check on Node 24.19.0 loaded the real worker and queue with an in-memory store, controlled timers/clock and a controlled persistence callback. One initial connection failure, one failed persistence attempt and a held successful retry produced `accepted -> retry -> drained` across three polls. Maximum concurrent worker calls was one; stop waited for the held write and left no timer. This was not an HTTP shutdown, real Mongo, deployed restart or full-suite execution.
 
 ## Env
 
@@ -68,7 +76,7 @@ Set these in the server environment. Backlog, retry and lease settings are read 
 
 For a local maintainer check, `npm run test:durable-audit` runs the queue and destination-adapter cases. These cover abandoned leases, stale success/retry/DLQ transitions, and a successful destination insertion followed by an acknowledgement outage with zero persistence retries. Adapter fault injection controls the database boundary; it does not establish live Mongo durability or index installation.
 
-Set `AUDIT_TEST_MONGODB_URI` to a disposable Mongo endpoint to also run the three Mongo integration cases with the same command. Each run creates and removes its own uniquely named test database. They exercise competing atomic claims, stale transitions, unique destination insertion after an acknowledgement interruption, and compatibility with legacy records. Without this variable those cases are explicitly skipped. The dedicated configuration still excludes the unlock handler tests. Deployment restart/worker scheduling and actual Mongo integration must be verified in the target environment before relying on its recovery guarantees.
+Set `AUDIT_TEST_MONGODB_URI` to a disposable Mongo endpoint to also run the three Mongo integration cases with the same command. Each run creates and removes its own uniquely named test database. They exercise competing atomic claims, stale transitions, unique destination insertion after an acknowledgement interruption, and compatibility with legacy records. Without this variable those cases are explicitly skipped. The dedicated configuration still excludes the unlock handler tests. The deployed server lifecycle and actual Mongo integration must still be verified in the target environment before relying on its recovery guarantees.
 
 ### Recovery continuation validation (2026-10-04)
 
