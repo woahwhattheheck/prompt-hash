@@ -20,12 +20,34 @@ export type PromptSortKey =
   | "price-high"
   | "sales";
 
-/** Convert an XLM UI bound to stroops with fixed 7-decimal precision. */
+/** Convert an XLM price using the existing seven-decimal rounding policy. */
 export function xlmBoundToStroops(xlm: number): bigint {
   if (!Number.isFinite(xlm)) {
     throw new Error("XLM bound must be a finite number");
   }
   return xlmToStroops(xlm.toFixed(7));
+}
+
+/** Convert a filter endpoint without rounding an out-of-range price into it. */
+export function xlmFilterBoundToStroops(
+  xlm: number,
+  bound: "min" | "max",
+): bigint {
+  if (!Number.isFinite(xlm)) {
+    throw new Error("XLM bound must be a finite number");
+  }
+  const [mantissa, exponent = "0"] = xlm.toString().split("e");
+  const [whole, fraction = ""] = mantissa.split(".");
+  const coefficient = BigInt(whole + fraction);
+  const shift = Number(exponent) + 7 - fraction.length;
+  if (shift >= 0) return coefficient * 10n ** BigInt(shift);
+
+  const denominator = 10n ** BigInt(-shift);
+  const integral = coefficient / denominator;
+  const remainder = coefficient % denominator;
+  if (bound === "min" && remainder > 0n) return integral + 1n;
+  if (bound === "max" && remainder < 0n) return integral - 1n;
+  return integral;
 }
 
 /**
@@ -38,10 +60,10 @@ export function priceStroopsWithinXlmBounds(
   maxXlm?: number,
 ): boolean {
   if (minXlm !== undefined) {
-    if (priceStroops < xlmBoundToStroops(minXlm)) return false;
+    if (priceStroops < xlmFilterBoundToStroops(minXlm, "min")) return false;
   }
   if (maxXlm !== undefined) {
-    if (priceStroops > xlmBoundToStroops(maxXlm)) return false;
+    if (priceStroops > xlmFilterBoundToStroops(maxXlm, "max")) return false;
   }
   return true;
 }
