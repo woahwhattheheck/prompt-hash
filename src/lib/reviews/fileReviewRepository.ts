@@ -53,8 +53,15 @@ async function writeSnapshot(
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`;
   const payload = JSON.stringify(snapshot, null, 2);
-  await fs.writeFile(tmp, payload, "utf8");
-  await fs.rename(tmp, filePath);
+  try {
+    await fs.writeFile(tmp, payload, "utf8");
+    await fs.rename(tmp, filePath);
+  } catch (error) {
+    // A partial write or failed rename must not accumulate orphan snapshots.
+    // Cleanup is best-effort; keep the original storage failure authoritative.
+    await fs.unlink(tmp).catch(() => undefined);
+    throw error;
+  }
 }
 
 function newReviewId(): string {
