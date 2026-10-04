@@ -1,0 +1,45 @@
+name: PH272 cache reconnect regression
+
+on:
+  push:
+    branches: [validation/ph272-write-fence-20261004]
+
+permissions:
+  contents: read
+
+jobs:
+  reconnect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: server
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install existing locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify tested source blobs
+        run: |
+          test "$(git hash-object src/services/cacheService.ts)" = 6ac80d7a7efb12ed2b7cfe1eba0ba7962ac059d6
+          test "$(git hash-object src/tests/cacheService.test.ts)" = 144336619a4ecf5dfd3997adb38bad0191ea229d
+          node --version
+      - name: Require the parent to fail both reconnect cases
+        run: |
+          git show f2a72589344ef4b43d2bd68c5fd1c741ecbc800f:server/src/services/cacheService.ts > src/services/cacheService.ts
+          set +e
+          npx --no-install jest --runInBand --testPathPatterns=cacheService --testNamePattern='completed load reconnects' --json --outputFile=/tmp/ph272-parent.json
+          result=$?
+          set -e
+          git restore --source=HEAD -- src/services/cacheService.ts
+          test "$result" -eq 1
+          node -e 'const r=require("/tmp/ph272-parent.json"); if(r.numFailedTests!==2 || r.numPassedTests!==0 || r.numRuntimeErrorTestSuites!==0) process.exit(1)'
+      - name: Run the two maintained reconnect cases on the fix
+        run: npx --no-install jest --runInBand --testPathPatterns=cacheService --testNamePattern='completed load reconnects'
+      - name: Lint the cache implementation
+        run: npx --no-install eslint src/services/cacheService.ts
