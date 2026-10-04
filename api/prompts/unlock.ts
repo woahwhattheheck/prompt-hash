@@ -487,8 +487,6 @@ const redactedAddress = String(address).slice(0, 8) + "...";
       return;
     }
 
-    metrics.trackUnlockSuccess(String(address), String(promptId));
-    req.logger.info({ address: redactedAddress, promptId }, "Prompt unlocked successfully");
     if (
       !(await acceptCriticalAudit(res, {
         action: "unlock_success",
@@ -502,6 +500,8 @@ const redactedAddress = String(address).slice(0, 8) + "...";
     ) {
       return;
     }
+    metrics.trackUnlockSuccess(String(address), String(promptId));
+    req.logger.info({ address: redactedAddress, promptId }, "Prompt unlocked successfully");
 
     // Fire-and-forget webhook dispatch
     void Promise.resolve(
