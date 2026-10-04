@@ -1,0 +1,92 @@
+name: PH274 configured Mongo regression Basin9190
+on:
+  push:
+    branches: ["validation/ph274-mongo-basin9190"]
+permissions:
+  contents: read
+concurrency:
+  group: ph274-mongo-basin9190
+  cancel-in-progress: false
+jobs:
+  store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.19.0"
+      - name: Install only the pinned maintained-test toolchain
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ph274-toolchain" --ignore-scripts --no-audit --no-fund vitest@4.1.10 vite@8.1.5
+          ln -s "$RUNNER_TEMP/ph274-toolchain/node_modules" node_modules
+      - name: Reproduce and run the maintained seller notification suite
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, shutil, subprocess, time
+          
+          root = pathlib.Path.cwd()
+          proof = root / "ph274-proof"
+          proof.mkdir()
+          target = root / "src/lib/notifications/sellerNotificationStore.ts"
+          candidate = target.read_bytes()
+          paths = [
+              "src/lib/notifications/sellerNotificationStore.ts",
+              "src/lib/notifications/sellerNotificationStore.test.ts",
+              "vitest.seller-notif-cursors.config.mjs",
+          ]
+          records = []
+          def run(label, args):
+              begin = time.monotonic()
+              result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              (proof / (label + ".log")).write_text(result.stdout)
+              record = {"name": label, "command": args, "exit": result.returncode, "seconds": time.monotonic() - begin}
+              records.append(record)
+              print(json.dumps(record), flush=True)
+              print(result.stdout[-16000:], flush=True)
+              return result
+          base = "a78138e26461569ae57a9591367fbc63b343e736"
+          try:
+              target.write_bytes(subprocess.check_output(["git", "show", base + ":" + paths[0]]))
+              before = run("baseline", ["npm", "run", "test:seller-notif-cursors", "--",
+                  "src/lib/notifications/sellerNotificationStore.test.ts", "--maxWorkers=1",
+                  "--reporter=json", "--outputFile=ph274-proof/baseline.json"])
+              baseline = json.loads((proof / "baseline.json").read_text())
+              assert before.returncode == 1, "Baseline must reproduce assertion failures"
+              assert baseline["numFailedTests"] == 2 and baseline["numPassedTests"] == 2, baseline
+          finally:
+              target.write_bytes(candidate)
+          after = run("candidate", ["npm", "run", "test:seller-notif-cursors", "--",
+              "--maxWorkers=1", "--reporter=json", "--outputFile=ph274-proof/candidate.json"])
+          assert after.returncode == 0, "Candidate maintained suite failed"
+          fixed = json.loads((proof / "candidate.json").read_text())
+          assert fixed["numFailedTests"] == 0 and fixed["numPassedTests"] == 43, fixed
+          digests = {}
+          for name in paths:
+              data = (root / name).read_bytes()
+              digests[name] = hashlib.sha256(data).hexdigest()
+              shutil.copyfile(root / name, proof / pathlib.Path(name).name)
+          (proof / "product.patch").write_bytes(subprocess.check_output(["git", "diff", base, "--"] + paths))
+          report = {
+              "base": base,
+              "staged": os.environ["GITHUB_SHA"],
+              "node": subprocess.check_output(["node", "--version"], text=True).strip(),
+              "tooling": "Isolated pinned Vitest 4.1.10 and Vite 8.1.5, original maintained npm script/config, one worker; not a full application dependency installation",
+              "baseline": {"passed": baseline["numPassedTests"], "failed": baseline["numFailedTests"]},
+              "candidate": {"passed": fixed["numPassedTests"], "failed": fixed["numFailedTests"], "pending": fixed.get("numPendingTests", 0)},
+              "checks": records,
+              "source_sha256": digests,
+              "scope": "Actual store entry points and filesystem, controlled Mongo connection/factory boundary; no live Mongo, HTTP/indexer/browser or full application build",
+          }
+          (proof / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+          print(json.dumps(report, indent=2), flush=True)
+          
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ph274-mongo-basin9190
+          path: ph274-proof
+          if-no-files-found: error
+          retention-days: 30
