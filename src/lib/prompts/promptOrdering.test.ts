@@ -114,6 +114,7 @@ describe("promptOrdering", () => {
     expect(priceStroopsWithinXlmBounds(0n, undefined, 0)).toBe(true);
     expect(priceStroopsWithinXlmBounds(1n, undefined, 0)).toBe(false);
   });
+
   it("does not widen fractional-stroop filter endpoints", () => {
     expect(priceStroopsWithinXlmBounds(1n, 0.00000011)).toBe(false);
     expect(priceStroopsWithinXlmBounds(2n, 0.00000011)).toBe(true);
@@ -142,5 +143,4 @@ describe("promptOrdering", () => {
       expect(() => xlmFilterBoundToStroops(value, "max")).toThrow("finite");
     }
   });
-
 });
