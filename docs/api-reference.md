@@ -364,16 +364,18 @@ Alternatively, send the administrator bearer header and a JSON body containing t
 
 ### Signature verification
 
-Verify the webhook payload using your stored secret:
+Verify the exact request body bytes using your stored secret, before parsing JSON. Do not use `JSON.stringify(req.body)` to reconstruct the signed payload: parsing and reserializing JSON can change those bytes.
 
 ```typescript
+import { Buffer } from "buffer";
 import { createHmac } from "crypto";
 
 function verifyWebhookSignature(
   secret: string,
-  body: string,
-  signature: string,
+  body: Buffer,
+  signature: unknown,
 ): boolean {
+  if (typeof signature !== "string") return false;
   const expected = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
   if (expected.length !== signature.length) return false;
   let result = 0;
@@ -384,21 +386,32 @@ function verifyWebhookSignature(
 }
 ```
 
-Usage in an Express handler:
+Use that helper in an Express handler. Set `PROMPTHASH_WEBHOOK_SECRET` to the secret returned by subscription creation or its latest update. Register this route **before** any global `express.json()` middleware so the body remains a `Buffer`:
 
 ```typescript
-app.post("/webhooks", (req, res) => {
-  const signature = req.headers["x-prompthash-signature"];
-  const body = JSON.stringify(req.body);
+import express from "express";
 
-  if (!verifyWebhookSignature(YOUR_SECRET, body, signature)) {
+const app = express();
+const webhookSecret = process.env.PROMPTHASH_WEBHOOK_SECRET;
+if (!webhookSecret) throw new Error("PROMPTHASH_WEBHOOK_SECRET is required");
+
+app.post("/webhooks", express.raw({ type: "application/json" }), (req, res) => {
+  const signature = req.get("X-PromptHash-Signature");
+
+  if (!Buffer.isBuffer(req.body) || !verifyWebhookSignature(webhookSecret, req.body, signature)) {
     return res.status(401).json({ error: "Invalid signature" });
   }
 
-  const deliveryId = req.headers["x-prompthash-delivery"];
+  try {
+    req.body = JSON.parse(req.body.toString("utf8"));
+  } catch {
+    return res.status(400).json({ error: "Invalid JSON" });
+  }
+
+  const deliveryId = req.get("X-PromptHash-Delivery");
   // Use deliveryId for idempotency — skip if already processed
 
-  // Process the event...
+  // Validate req.body fields and process the event before acknowledging it.
   res.status(200).json({ received: true });
 });
 ```
