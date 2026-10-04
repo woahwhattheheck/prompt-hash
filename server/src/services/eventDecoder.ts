@@ -98,6 +98,7 @@ function isSupportedVersion(v: number): v is SupportedSchemaVersion {
 const U64_MAX = (1n << 64n) - 1n;
 const I128_MIN = -(1n << 127n);
 const I128_MAX = (1n << 127n) - 1n;
+const REQUIRED_ADDRESS_FIELDS = new Set<string>(["creator", "buyer", "asset"]);
 
 /** Admit exact contract integers without changing their serialized representation. */
 function isContractInteger(value: unknown, min: bigint, max: bigint): boolean {
@@ -282,16 +283,19 @@ export function decodeEvent(
     );
   }
 
-  // Required values must remain present after primitive normalization.
-  // Contract IDs (u64) and stroop amounts (i128) are integers. JSON Numbers
-  // outside the safe integer range may already be rounded; use strings or
-  // bigint for larger exact values rather than canonicalizing corrupted data.
-  const invalidRequired = required.filter(
-    (key) =>
-      asString(merged[key]) === null ||
-      (key === "prompt_id" && !isContractInteger(merged[key], 0n, U64_MAX)) ||
-      (key === "price_stroops" && !isContractInteger(merged[key], I128_MIN, I128_MAX)),
-  );
+  // Required values must match their contract-level primitive types.
+  // Contract IDs (u64) and stroop amounts (i128) are exact integers. Required
+  // Soroban Address fields are serialized strings; preserve their spelling and
+  // leave StrKey format/checksum validation to the address decoder boundary.
+  const invalidRequired = required.filter((key) => {
+    const value = merged[key];
+    return (
+      asString(value) === null ||
+      (REQUIRED_ADDRESS_FIELDS.has(key) && typeof value !== "string") ||
+      (key === "prompt_id" && !isContractInteger(value, 0n, U64_MAX)) ||
+      (key === "price_stroops" && !isContractInteger(value, I128_MIN, I128_MAX))
+    );
+  });
   if (invalidRequired.length > 0) {
     return finish(
       deadLetter(
