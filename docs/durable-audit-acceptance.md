@@ -76,7 +76,15 @@ The focused command passed 25 queue and destination-adapter cases with Vitest 4.
 
 A controlled native comparison against parent source `3d777ee8b45eeb4cb781a40cdf71acceabe58c4f` reproduced two failures: an abandoned claim remained `draining` and a later drain returned `idle`; a successful persistence callback followed by acknowledgement failure entered DLQ when `maxRetries=0`. With this change, the expired claim drained, and acknowledgement failure retained a recoverable claim without consuming retries or DLQ. These executions used the real queue with controlled store and destination boundaries, not a killed Mongo process.
 
-An isolated MongoDB 7.0.14 startup attempt exited with code 100 and `open: Operation not permitted` in the cloud environment. Live Mongo atomicity, index enforcement and process-restart integration were therefore not executed. The optional integration cases and rollout conditions above remain necessary checks for a deployment; the native fault-injection results do not substitute for them.
+An isolated local MongoDB 7.0.14 startup attempt exited with code 100 and `open: Operation not permitted`. The native run therefore skipped the three opt-in database cases. Those same cases were subsequently executed against a disposable MongoDB 7.0.14 service in the public fork.
+
+### Hosted Mongo validation (2026-10-04)
+
+[Run 37186271164](https://github.com/woahwhattheheck/prompt-hash/actions/runs/37186271164) completed successfully and explicitly checked out published source `f863e3f33b4d35edd4a91395934c975cd29f58eb`. Only `tests/durableAuditQueue.mongo.test.ts` was selected through the existing dedicated configuration: **3 passed, 0 skipped**, with Vitest duration 595 ms. The recorded runtime was Node 24.19.0, Vitest 4.1.10, Mongoose 9.9.2 and Vite 8.3.2.
+
+The live Mongo cases confirmed that competing reclaimers obtain only one claim, every stale-token transition fails to match, replay after an acknowledgement interruption leaves exactly one unchanged destination row, and the partial unique index coexists with legacy records lacking acceptance IDs. The cases awaited model/index initialization and used a uniquely named disposable database, which was removed afterward. The job's Mongo service and all steps completed successfully.
+
+This result establishes those database operations on the published source with injected worker-abandonment and acknowledgement failures. It does not establish a killed application process, deployment restart scheduling, target-environment index provisioning or production rollout. The rollout conditions above still apply. The validation workflow lives only on `validation/ph263-mongo-2050-20261004`, outside the bounty PR branch.
 
 ## Non-goals
 
