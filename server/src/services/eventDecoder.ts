@@ -262,7 +262,8 @@ export function decodeEvent(
   }
 
   const merged = mergePayload(raw);
-  const missing = requiredFieldsFor(resolved.lifecycle).filter(
+  const required = requiredFieldsFor(resolved.lifecycle);
+  const missing = required.filter(
     (key) => merged[key] === undefined || merged[key] === null,
   );
   if (missing.length > 0) {
@@ -276,9 +277,23 @@ export function decodeEvent(
     );
   }
 
+  // Required values must remain present after primitive normalization.
+  const invalidRequired = required.filter(
+    (key) => normalizeField(key, merged[key]) === null,
+  );
+  if (invalidRequired.length > 0) {
+    return finish(
+      deadLetter(
+        "SCHEMA_VALIDATION_FAILED",
+        `Invalid required fields for ${resolved.lifecycle}: ${invalidRequired.join(", ")}`,
+        raw,
+        { lifecycle: resolved.lifecycle, contractEvent: resolved.contractEvent },
+      ),
+    );
+  }
+
   // Deterministic field projection: required keys first (stable order), then
   // optional additive keys sorted alphabetically (v2+).
-  const required = requiredFieldsFor(resolved.lifecycle);
   const optionalKeys = Object.keys(merged)
     .filter((k) => !required.includes(k))
     .sort();

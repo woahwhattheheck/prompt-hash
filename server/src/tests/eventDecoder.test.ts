@@ -227,6 +227,92 @@ describe("unsupported versions fail safely (dead-letter)", () => {
     },
   );
 
+  for (const [file, location, field] of [
+    ["publish.v1.json", "topics", "prompt_id"],
+    ["publish.v1.json", "value", "creator"],
+    ["publish.v1.json", "value", "price_stroops"],
+    ["publish.v1.json", "value", "asset"],
+    ["purchase.v1.json", "topics", "prompt_id"],
+    ["purchase.v1.json", "value", "buyer"],
+    ["purchase.v1.json", "value", "creator"],
+    ["purchase.v1.json", "value", "price_stroops"],
+    ["unlock.v1.json", "topics", "prompt_id"],
+    ["unlock.v1.json", "value", "buyer"],
+  ] as const) {
+    it.each([
+      ["object", "{}"],
+      ["array", "[]"],
+    ] as const)(
+      `${file}: required ${field} as %s is a schema failure`,
+      (_shape, json) => {
+        const fixture = loadFixture(file);
+        const payload = fixture[location];
+        if (!payload) throw new Error("Fixture is missing its payload");
+        payload[field] = JSON.parse(json);
+
+        const result = decodeEvent(fixture, { now: fixedNow });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+
+        expect(result.deadLetter.reason).toBe("SCHEMA_VALIDATION_FAILED");
+        expect(result.deadLetter.message).toContain(field);
+        expect(result.deadLetter.lifecycle).toBe(fixture.lifecycle);
+        expect(result.deadLetter.contractEvent).toBe(fixture.contractEvent);
+        expect(result.deadLetter.raw).toBe(fixture);
+        expect(result.deadLetter.receivedAt).toBe(fixedNow.toISOString());
+      },
+    );
+  }
+
+  it.each([
+    ["empty string", "", ""],
+    ["zero number", 0, "0"],
+    ["bigint", BigInt(42), "42"],
+    ["false boolean", false, "false"],
+  ] as const)(
+    "required prompt_id preserves %s normalization",
+    (_label, value, expected) => {
+      const fixture = loadFixture("publish.v1.json");
+      fixture.topics = { ...fixture.topics, prompt_id: value };
+
+      const result = decodeEvent(fixture, { now: fixedNow });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      expect(result.event.promptId).toBe(expected);
+      expect(result.event.fields.prompt_id).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["object", "{}"],
+    ["array", "[]"],
+  ] as const)("optional %s values retain null projection", (_shape, json) => {
+    const fixture = loadFixture("publish.v2.json");
+    fixture.value = { ...fixture.value, metadata_uri: JSON.parse(json) };
+
+    const result = decodeEvent(fixture, { now: fixedNow });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.event.fields.metadata_uri).toBeNull();
+    expect(result.event.promptId).toBe(fixture.expected?.promptId);
+  });
+
+  it("unsupported version takes precedence over invalid required values", () => {
+    const fixture = loadFixture("publish.v1.json");
+    fixture.schemaVersion = 99;
+    fixture.topics = { ...fixture.topics, prompt_id: {} };
+
+    const result = decodeEvent(fixture, { now: fixedNow });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    expect(result.deadLetter.reason).toBe("UNSUPPORTED_VERSION");
+    expect(result.deadLetter.raw).toBe(fixture);
+    expect(result.deadLetter.receivedAt).toBe(fixedNow.toISOString());
+  });
+
   it("missing required fields → SCHEMA_VALIDATION_FAILED", () => {
     const fixture = loadFixture("unsupported.missing_fields.json");
     const result = decodeEvent(fixture, { now: fixedNow });

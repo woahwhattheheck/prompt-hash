@@ -66,8 +66,16 @@ Decoder entrypoint: `decodeEvent()` in `server/src/services/eventDecoder.ts`.
 | -------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
 | `UNSUPPORTED_VERSION`      | `schemaVersion` not in supported set              | Hold; ship decoder support or backfill rewrite                      |
 | `UNKNOWN_EVENT_TYPE`       | lifecycle / contract event not mapped             | Confirm event name against `events.rs`; ignore noise or add mapping |
-| `SCHEMA_VALIDATION_FAILED` | Supported version but missing required fields     | Inspect producer / RPC decoding bugs                                |
+| `SCHEMA_VALIDATION_FAILED` | Required field missing, null or nonprimitive      | Inspect producer / RPC decoding bugs                                |
 | `CORRUPT_PAYLOAD`          | Envelope not an object / bad `schemaVersion` type | Drop or repair upstream serialization                               |
+
+Required payload fields must normalize to strings. Strings, numbers, bigints
+and booleans retain their existing normalization, including lowercasing for
+address fields. An object or array in a required field is rejected with
+`SCHEMA_VALIDATION_FAILED`, rather than producing a successful event with a
+null required value. Missing or null required fields keep their existing
+missing-field diagnostic. Optional fields retain their prior projection,
+including null for values that cannot normalize to a primitive string.
 
 In-process sink: `InMemoryEventDeadLetter` + `routeToDeadLetter()` in
 `server/src/services/eventDeadLetter.ts`. The routing helper logs synchronous
@@ -104,7 +112,12 @@ without throwing.
 - Live indexer switch (topic routing): `server/src/services/indexer.ts`
 - Pipeline quarantine hook: `server/src/services/indexerPipeline.ts` (`quarantine`)
 
-## Malformed event-name continuation
+## Historical malformed event-name continuation
+
+The validation below was recorded at
+`a8918d4cf53cf708cc10b7e636bc8d311fc80da1`, before the required-field
+normalization repair. It is retained evidence for that event-name scope,
+not a validation run of later source or regression changes.
 
 The continuation from `4507ff9b0e4865b8851c5a43f207b1c4f4ad6dbc` on PR #276
 repairs a failure before dead-letter routing. Ordinary parsed JSON could
