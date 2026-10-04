@@ -2,8 +2,9 @@ import React from "react";
 import { RefreshCw, AlertTriangle } from "lucide-react";
 import type { ListingQuote } from "@/lib/auth/listingTerms";
 import type { ListingTermsChange } from "@/lib/auth/listingTerms";
+import { nativeAssetContractId } from "@/lib/env";
 
-function stroopsToXlm(priceStroops: string): string {
+function stroopsToDecimal(priceStroops: string): string {
   try {
     const stroops = BigInt(priceStroops);
     const whole = stroops / 10_000_000n;
@@ -13,6 +14,10 @@ function stroopsToXlm(priceStroops: string): string {
   } catch {
     return priceStroops;
   }
+}
+
+function isNativeAsset(asset: string): boolean {
+  return asset.trim().toLowerCase() === nativeAssetContractId.trim().toLowerCase();
 }
 
 const CHANGE_LABELS: Record<ListingTermsChange, string> = {
@@ -67,7 +72,7 @@ export const StaleListingBanner: React.FC<StaleListingBannerProps> = ({
             <div>
               <dt className="text-amber-200/70">Price</dt>
               <dd className="font-semibold text-white">
-                {stroopsToXlm(quote.priceStroops)} XLM
+                {stroopsToDecimal(quote.priceStroops)}{isNativeAsset(quote.asset) ? " XLM" : ""}
               </dd>
             </div>
             <div>
