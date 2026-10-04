@@ -5,6 +5,7 @@
 import { createHmac } from "node:crypto";
 import { Keypair } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { internalServerError } from "./domainResult";
 import {
   getBuyerVersion,
   handlePromptVersionHttp,
@@ -163,6 +164,15 @@ function callWebhookContract(
       throw new Error("Unsupported contract fixture method");
   }
 }
+
+describe("adapter failure contract", () => {
+  it("returns a stable client-safe 500 for unexpected adapter failures", () => {
+    expect(internalServerError()).toEqual({
+      status: 500,
+      body: { error: "Internal server error." },
+    });
+  });
+});
 
 describe("prompt versioning contract", () => {
   it("requires purchase entitlement (no silent v1 fallback)", async () => {
