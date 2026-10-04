@@ -88,3 +88,19 @@ Retry timing, backoff, and disable-after-N-failures are **unchanged**.
 ```bash
 npm --prefix server run test:webhook-log-privacy
 ```
+
+## Recorded nested-query execution (2026-10-04)
+
+A direct Node.js 24.19.0 (Linux x64) comparison imported the complete helper with
+native type stripping at parent `71fec207b7b3825881fc517559bdc944d4f04d6d` and
+candidate `c5b1a0a7903689708f6c95a0e6848a975d3ef7bd`. The four nested aliases listed
+above each retained a synthetic credential through both `redactEndpointUrl` and
+`publicDeliveryLogEndpoint` before the repair: eight leaking observations. After
+the repair, all eight returned redacted duplicate values, preserved `ref=campaign`,
+and were idempotent. The existing harmless `monkey` / `countryCode` URL stayed
+unchanged before and after. Both source Git blobs were verified before import;
+the executed candidate helper blob is `ebba3001664c9cf2155c594c50a232cb5268e883`.
+
+The four inputs were added to each of the two maintained test tables. This direct
+helper execution does not establish a current Jest/ts-jest suite, typecheck, lint,
+build, dispatcher, database, deployed API or TTL-deletion result.
