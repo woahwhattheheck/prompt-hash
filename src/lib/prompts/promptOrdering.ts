@@ -36,6 +36,7 @@ export function xlmFilterBoundToStroops(
   if (!Number.isFinite(xlm)) {
     throw new Error("XLM bound must be a finite number");
   }
+  // Use the same canonical decimal text sent in the indexed API query.
   const [mantissa, exponent = "0"] = xlm.toString().split("e");
   const [whole, fraction = ""] = mantissa.split(".");
   const coefficient = BigInt(whole + fraction);
@@ -45,6 +46,7 @@ export function xlmFilterBoundToStroops(
   const denominator = 10n ** BigInt(-shift);
   const integral = coefficient / denominator;
   const remainder = coefficient % denominator;
+  // BigInt division truncates toward zero; adjust only the relevant direction.
   if (bound === "min" && remainder > 0n) return integral + 1n;
   if (bound === "max" && remainder < 0n) return integral - 1n;
   return integral;
