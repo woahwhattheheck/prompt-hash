@@ -144,7 +144,8 @@ export function createFileReviewRepository(filePath: string): ReviewRepository {
         };
         review.reports.push(report);
         review.reportCount += 1;
-        review.status = "flagged";
+        // A report must not undo a moderator's decision to hide the review.
+        if (review.status !== "hidden") review.status = "flagged";
         review.updatedAt = Date.now();
         return {
           ...review,

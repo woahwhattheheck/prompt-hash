@@ -326,8 +326,29 @@ describe("file-backed durable reviews", () => {
     const hidden = await moderateReview(review.id, "5", "hide");
     expect(hidden.status).toBe("hidden");
 
+    const reportedHidden = await reportReview(
+      review.id,
+      "5",
+      "GREPORTER2",
+      "$status is literal report text",
+    );
+    expect(reportedHidden.status).toBe("hidden");
+    expect(reportedHidden.reportCount).toBe(2);
+    expect(reportedHidden.reports[1].reason).toBe("$status is literal report text");
+
+    const reloaded = createFileReviewRepository(storePath);
+    expect((await reloaded.getById(review.id, "5"))?.status).toBe("hidden");
+    await expect(
+      reloaded.reportReview(review.id, "5", "greporter2", "Duplicate report"),
+    ).rejects.toBeInstanceOf(DuplicateReportError);
+    expect((await reloaded.getById(review.id, "5"))?.reportCount).toBe(2);
+
     const publicList = await getPublicReviews("5");
     expect(publicList.map((r) => r.id)).not.toContain(review.id);
+
+    const unhidden = await moderateReview(review.id, "5", "unhide");
+    expect(unhidden.status).toBe("visible");
+    expect(unhidden.reportCount).toBe(2);
 
     const restored = await moderateReview(review.id, "5", "dismiss_reports");
     expect(restored.status).toBe("visible");

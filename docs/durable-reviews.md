@@ -14,6 +14,10 @@ Review submission, reports, and moderation no longer use a process-local seeded 
 - **Durability:** reviews reload after process restart.
 - **Uniqueness:** concurrent duplicate `(promptId, wallet)` submits create **exactly one** review (`DuplicateReviewError` / HTTP 409 / Mongo `E11000`).
 - **Atomic transitions:** report appends only if the reporter is new; moderation applies in one update.
+- **Moderation preservation:** new reports on a hidden review are recorded without
+  making it public. Only explicit `unhide` or `dismiss_reports` moderation restores
+  visibility. Mongo resolves the current status and appends the report in one
+  atomic update pipeline; report payloads remain literal data.
 - **No production seed:** fictional `review_1`…`review_3` rows are never inserted on boot. Migration `003_durable_reviews_remove_seeds.ts` deletes leftovers and backfills `status` / `reports` / `reviewId`.
 
 ## File-store recovery

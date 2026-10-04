@@ -77,7 +77,7 @@ export interface MongoReviewModel {
   };
   findOneAndUpdate(
     filter: Record<string, unknown>,
-    update: Record<string, unknown>,
+    update: Record<string, unknown> | Array<Record<string, unknown>>,
     options: Record<string, unknown>,
   ): Promise<LeanReview | null>;
   deleteMany(filter: Record<string, unknown>): Promise<{ deletedCount?: number }>;
@@ -140,18 +140,32 @@ export function createMongoReviewRepository(Review: MongoReviewModel): ReviewRep
           ...idFilter(reviewId, promptId),
           "reports.reporterAddress": { $ne: reporter },
         },
-        {
-          $push: {
-            reports: {
-              reporterAddress: reporter,
-              reason: reason.trim(),
-              createdAt: new Date(),
+        [
+          {
+            $set: {
+              reports: {
+                $concatArrays: [
+                  { $ifNull: ["$reports", []] },
+                  {
+                    $literal: [
+                      {
+                        reporterAddress: reporter,
+                        reason: reason.trim(),
+                        createdAt: new Date(),
+                      },
+                    ],
+                  },
+                ],
+              },
+              reportCount: { $add: [{ $ifNull: ["$reportCount", 0] }, 1] },
+              // Resolve against the stored status in the same atomic update.
+              status: {
+                $cond: [{ $eq: ["$status", "hidden"] }, "hidden", "flagged"],
+              },
             },
           },
-          $inc: { reportCount: 1 },
-          $set: { status: "flagged" },
-        },
-        { new: true },
+        ],
+        { new: true, updatePipeline: true },
       );
 
       if (updated) return toStored(updated);
