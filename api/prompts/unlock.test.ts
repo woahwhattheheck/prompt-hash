@@ -83,6 +83,11 @@ vi.mock("../../server/src/services/webhookDispatcher", () => ({
 }));
 
 import handler from "./unlock";
+import { metrics } from "../../src/lib/observability/metrics";
+import {
+  acceptCriticalUnlockAudit,
+  AuditAcceptError,
+} from "../../server/src/services/durableAuditQueue";
 
 async function setupUnlockFixture(plaintext = "Secret prompt instructions for buyers.", ttlMs = 5 * 60 * 1000) {
   const buyer = Keypair.random();
@@ -181,6 +186,27 @@ describe("unlock API integrity and replay protection checks (#37)", () => {
     expect(statusCode).toBe(200);
     expect(responseData.plaintext).toBe(plaintext);
     expect(responseData.contentHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("does not report success when durable audit acceptance fails closed", async () => {
+    const { buyer, promptId, challenge, signedMessage } =
+      await setupUnlockFixture();
+
+    vi.mocked(acceptCriticalUnlockAudit).mockRejectedValueOnce(
+      new AuditAcceptError("audit unavailable"),
+    );
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(503);
+    expect(responseData.code).toBe(ErrorCode.TEMPORARY_FAILURE);
+    expect(responseData.plaintext).toBeUndefined();
+    expect(metrics.trackUnlockSuccess).not.toHaveBeenCalled();
   });
 
   it("rejects challenge token replay attempts", async () => {
