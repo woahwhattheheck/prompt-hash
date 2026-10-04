@@ -1,4 +1,4 @@
-# Review snapshot write-failure recovery
+# Review storage failure recovery
 
 The file repository now removes its own temporary snapshot when a write or
 atomic rename fails. Cleanup runs only on the failure path and is best-effort:
@@ -40,3 +40,23 @@ and `0da047ce07ae967594353a166aab1799c07f1f16`, respectively.
 These are focused filesystem failure/recovery results, not a newly executed
 full typecheck, complete durable-review suite, MongoDB, HTTP, CI, or
 power-loss durability result. No new test suite or runtime dependency was added.
+
+## Repository initialization recovery
+
+`getReviewRepository()` previously retained its first rejected initialization
+promise forever, even though the database connector clears its own failed
+connection attempt. It now evicts only the failed promise that is still current.
+A later request may retry; there is no automatic retry loop. Pending callers
+still share one construction, and a retired rejection cannot evict a replacement.
+
+Three direct complete-`reviewStore.ts` execution scenarios used the same Node
+and TypeScript versions, with controlled database-initializer/model/factory
+collaborators (not a live MongoDB integration). Failure-then-recovery failed on
+baseline blob `40806adaf4fd2a0aab069a4117aa75da16ab48fd` and passed on repaired
+blob `4c324ac24b223af670252f1043459883ae0f77f3`, committed at
+`12fa154e3cef8ef57f396073a76c5b1c96f586c0`. Two concurrent callers retained one
+initialization/factory result, and a late rejection after repository reset did
+not clear the newer in-flight initialization. Both controls passed before and
+after; the original rejection object was preserved. Mongo query behavior and
+configuration loading are unchanged. No live database availability or deployment
+result is asserted.
