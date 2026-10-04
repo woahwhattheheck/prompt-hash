@@ -18,9 +18,14 @@ test or container stop.
 | `HOST` | `0.0.0.0` | Bind address. |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Max time to drain + disconnect before forced exit (100–300000). |
 | `ENABLE_INPROCESS_SCHEDULER` | `false` | Optional tick registry only. **Backups stay cron-only** (`backup.crontab`). |
-| `SCHEDULER_TICK_MS` | `60000` | Validated when the in-process scheduler is enabled. |
+| `SCHEDULER_TICK_MS` | `60000` | Integer 100–86400000 when the in-process scheduler is enabled; ignored when disabled. |
 
-Invalid values fail fast at boot with `Invalid runtime configuration: …`.
+Invalid values for active runtime settings fail fast at boot with
+`Invalid runtime configuration: …`. When `ENABLE_INPROCESS_SCHEDULER` is false
+(the default), `SCHEDULER_TICK_MS` is not parsed and the returned runtime config
+uses `60000` ms. An unused tick value therefore cannot block startup. Enabling
+the scheduler restores validation of the configured interval; `PORT`, `HOST`,
+`SHUTDOWN_TIMEOUT_MS` and the scheduler boolean are validated in either mode.
 
 ## Shutdown sequence
 

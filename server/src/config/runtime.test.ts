@@ -58,4 +58,32 @@ describe("loadRuntimeConfig", () => {
   it("keeps in-process scheduler off by default (backups stay cron-only)", () => {
     expect(loadRuntimeConfig({}).enableInprocessScheduler).toBe(false);
   });
+
+  it("ignores an invalid scheduler tick when scheduling is disabled by default", () => {
+    expect(loadRuntimeConfig({ SCHEDULER_TICK_MS: "not-a-duration" })).toEqual(
+      RUNTIME_DEFAULTS,
+    );
+  });
+
+  it.each(["false", "0", "off", "no"])(
+    "ignores an unused out-of-range tick when scheduling is %s",
+    (enabled) => {
+      const cfg = loadRuntimeConfig({
+        ENABLE_INPROCESS_SCHEDULER: enabled,
+        SCHEDULER_TICK_MS: "0",
+        PORT: "8080",
+      });
+      expect(cfg.enableInprocessScheduler).toBe(false);
+      expect(cfg.schedulerTickMs).toBe(RUNTIME_DEFAULTS.schedulerTickMs);
+      expect(cfg.port).toBe(8080);
+    },
+  );
+
+  it("uses the runtime tick default instead of an inactive configured value", () => {
+    const cfg = loadRuntimeConfig({
+      ENABLE_INPROCESS_SCHEDULER: "false",
+      SCHEDULER_TICK_MS: "5000",
+    });
+    expect(cfg.schedulerTickMs).toBe(RUNTIME_DEFAULTS.schedulerTickMs);
+  });
 });

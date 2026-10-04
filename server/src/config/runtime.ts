@@ -75,12 +75,14 @@ export function loadRuntimeConfig(source: NodeJS.ProcessEnv = process.env): Runt
       max: MAX_SHUTDOWN_TIMEOUT_MS,
       name: "SHUTDOWN_TIMEOUT_MS",
     });
-    schedulerTickMs = envInt(source.SCHEDULER_TICK_MS, {
-      defaultValue: DEFAULT_SCHEDULER_TICK_MS,
-      min: 100,
-      max: 24 * 60 * 60 * 1000,
-      name: "SCHEDULER_TICK_MS",
-    });
+    schedulerTickMs = enableInprocessScheduler
+      ? envInt(source.SCHEDULER_TICK_MS, {
+          defaultValue: DEFAULT_SCHEDULER_TICK_MS,
+          min: 100,
+          max: 24 * 60 * 60 * 1000,
+          name: "SCHEDULER_TICK_MS",
+        })
+      : DEFAULT_SCHEDULER_TICK_MS;
   } catch (err) {
     throw new Error(
       `Invalid runtime configuration: ${err instanceof Error ? err.message : String(err)}`,
