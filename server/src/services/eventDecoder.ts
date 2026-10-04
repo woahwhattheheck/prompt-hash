@@ -95,6 +95,33 @@ function isSupportedVersion(v: number): v is SupportedSchemaVersion {
   return (SUPPORTED_SCHEMA_VERSIONS as readonly number[]).includes(v);
 }
 
+const U64_MAX = (1n << 64n) - 1n;
+const I128_MIN = -(1n << 127n);
+const I128_MAX = (1n << 127n) - 1n;
+
+/** Admit exact contract integers without changing their serialized representation. */
+function isContractInteger(value: unknown, min: bigint, max: bigint): boolean {
+  let integer: bigint;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) return false;
+    integer = BigInt(value);
+  } else if (typeof value === "string") {
+    const negative = value.startsWith("-");
+    const digits = negative ? value.slice(1) : value;
+    if (digits.length === 0 || /[^0-9]/.test(digits)) return false;
+    // Leading zeros are valid and stay unchanged in the eventual projection.
+    // Bound BigInt parsing to the widest contract integer, not the raw input.
+    const significant = digits.replace(/^0+/, "") || "0";
+    if (significant.length > 39) return false;
+    integer = BigInt((negative ? "-" : "") + significant);
+  } else {
+    return false;
+  }
+  return integer >= min && integer <= max;
+}
+
 function asString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   // Stellar StrKeys are case-sensitive; never case-fold address strings.
@@ -262,9 +289,8 @@ export function decodeEvent(
   const invalidRequired = required.filter(
     (key) =>
       asString(merged[key]) === null ||
-      ((key === "prompt_id" || key === "price_stroops") &&
-        typeof merged[key] === "number" &&
-        !Number.isSafeInteger(merged[key])),
+      (key === "prompt_id" && !isContractInteger(merged[key], 0n, U64_MAX)) ||
+      (key === "price_stroops" && !isContractInteger(merged[key], I128_MIN, I128_MAX)),
   );
   if (invalidRequired.length > 0) {
     return finish(
