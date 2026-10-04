@@ -4,6 +4,7 @@ import {
   priceStroopsWithinXlmBounds,
   sortPromptsBy,
   xlmBoundToStroops,
+  xlmFilterBoundToStroops,
 } from "./promptOrdering";
 
 const ABOVE_SAFE = BigInt(Number.MAX_SAFE_INTEGER) + 42n;
@@ -113,4 +114,33 @@ describe("promptOrdering", () => {
     expect(priceStroopsWithinXlmBounds(0n, undefined, 0)).toBe(true);
     expect(priceStroopsWithinXlmBounds(1n, undefined, 0)).toBe(false);
   });
+  it("does not widen fractional-stroop filter endpoints", () => {
+    expect(priceStroopsWithinXlmBounds(1n, 0.00000011)).toBe(false);
+    expect(priceStroopsWithinXlmBounds(2n, 0.00000011)).toBe(true);
+    expect(priceStroopsWithinXlmBounds(2n, undefined, 0.00000019)).toBe(false);
+    expect(priceStroopsWithinXlmBounds(1n, undefined, 0.00000019)).toBe(true);
+    expect(priceStroopsWithinXlmBounds(0n, 0.00000001)).toBe(false);
+    for (const price of [0n, 1n, 2n]) {
+      expect(priceStroopsWithinXlmBounds(price, 0.00000011, 0.00000019)).toBe(false);
+    }
+  });
+
+  it("handles signed and exponential decimal filter bounds exactly", () => {
+    expect(xlmFilterBoundToStroops(-0.00000011, "min")).toBe(-1n);
+    expect(xlmFilterBoundToStroops(-0.00000011, "max")).toBe(-2n);
+    expect(xlmFilterBoundToStroops(Number.MIN_VALUE, "min")).toBe(1n);
+    expect(xlmFilterBoundToStroops(Number.MIN_VALUE, "max")).toBe(0n);
+    expect(xlmFilterBoundToStroops(1e21, "min")).toBe(10n ** 28n);
+    expect(xlmFilterBoundToStroops(1e21, "max")).toBe(10n ** 28n);
+    expect(priceStroopsWithinXlmBounds(10n ** 28n, 1e21, 1e21)).toBe(true);
+    expect(priceStroopsWithinXlmBounds(0n, -0, 0)).toBe(true);
+  });
+
+  it("rejects non-finite filter endpoints", () => {
+    for (const value of [NaN, Infinity, -Infinity]) {
+      expect(() => xlmFilterBoundToStroops(value, "min")).toThrow("finite");
+      expect(() => xlmFilterBoundToStroops(value, "max")).toThrow("finite");
+    }
+  });
+
 });
