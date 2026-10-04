@@ -36,8 +36,8 @@ jobs:
           git rev-parse HEAD HEAD^{tree} > evidence/source.txt
           git hash-object package.json yarn.lock src/components/profile/PayoutStatementsCard.tsx src/components/profile/PayoutStatementsCard.test.tsx >> evidence/source.txt
           corepack enable
-          corepack prepare yarn@4.9.2 --activate
-          yarn install --immutable 2>&1 | tee evidence/install.log
+          corepack prepare yarn@1.22.22 --activate
+          yarn install --frozen-lockfile 2>&1 | tee evidence/install.log
           { node --version; yarn --version; yarn node -e 'for (const p of ["react", "react-dom", "vitest", "jsdom", "typescript"]) console.log(p, require(p + "/package.json").version)'; } > evidence/versions.txt
           git diff --exit-code -- package.json yarn.lock
       - name: Reproduce the three lifecycle failures on the original component
