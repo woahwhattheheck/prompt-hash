@@ -5,7 +5,7 @@ On-chain prompt IDs and prices are `bigint` (stroops). Client sort paths must **
 ## Helpers
 
 - `src/lib/stellar/bigintOrder.ts` — relational `compareBigInt` / `compareBigIntDesc` (`-1 | 0 | 1`).
-- `src/lib/prompts/promptOrdering.ts` — prompt sorts (id / price / sales) with deterministic id tie-breaks, plus `priceStroopsWithinXlmBounds` for exact XLM→stroop filter bounds via `xlmToStroops`.
+- `src/lib/prompts/promptOrdering.ts` — prompt sorts (id / price / sales) with deterministic id tie-breaks, plus `priceStroopsWithinXlmBounds` for exact XLM→stroop filter bounds via `xlmFilterBoundToStroops`.
 
 ## Call sites
 
@@ -65,3 +65,25 @@ using retained ESLint 9.39.5 and TypeScript parser/plugin 8.46.0 with the
 repository's recommended rules and explicit rule overrides. Prettier 3.9.6
 formatted the three changed files. These retained tool versions differ from
 the current package manifest; no dependency or lockfile was changed.
+
+## Fractional-stroop filter endpoints
+
+Filter endpoints are not rounded prices. A minimum of `0.00000011` XLM
+(1.1 stroops) must exclude a 1-stroop listing, and a maximum of
+`0.00000019` XLM (1.9 stroops) must exclude a 2-stroop listing.
+`xlmFilterBoundToStroops` parses the same canonical decimal number text
+sent to the indexed API, including exponential notation, and uses integer
+arithmetic to ceil minima and floor maxima. Equal endpoints that lie
+between two integer stroop values therefore match no listing.
+
+`priceStroopsWithinXlmBounds` and the contract-search fallback both use
+this directional conversion. The fallback still parses each supplied
+endpoint once per query, not once per listing. The existing work-count
+regression now observes this filter conversion rather than `toFixed`.
+Non-finite endpoints are rejected; zero and negative-zero remain valid.
+
+The rounded `xlmBoundToStroops` API-price conversion and exact decimal-string
+API-price conversion are unchanged. No number-only interface can recover
+precision already lost before a bound reaches it. Display formatting is
+also unchanged. Focused regressions are in `promptOrdering.test.ts` and
+`useSearchPrompts.test.ts`.
