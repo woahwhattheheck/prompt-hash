@@ -246,3 +246,93 @@ it("isolates seller alerts on wallet changes, late feeds and disconnect", async 
     cleanup();
   }
 });
+
+describe("failed seller read acknowledgements", () => {
+  function unreadFeed(wallet = "GA", id = "A") {
+    return {
+      wallet,
+      notifications: [{
+        id, type: "sale" as const, promptId: "1", title: "Prompt 1",
+        message: "New sale", createdAt: NOW, read: false,
+        eventId: id, logicalKey: id, ledger: 1,
+      }],
+      unreadCount: 1, cursorEventId: id, lastLedger: 1,
+    };
+  }
+
+  function setup() {
+    walletHook.address = "GA";
+    walletHook.feed = unreadFeed();
+    walletHook.postAction.mockReset().mockResolvedValue({});
+    let reject!: (error: Error) => void;
+    walletHook.postAction.mockImplementationOnce(() => new Promise((_, fail) => {
+      reject = fail;
+    }));
+    return { ...renderHook(() => useSellerNotifications()), reject: () => reject(new Error("offline")) };
+  }
+
+  it.each(["markAllRead", "clearAll"] as const)(
+    "restores the confirmed feed after rejected %s with unchanged query data",
+    async (action) => {
+      const { result, rerender, reject } = setup();
+      try {
+        act(() => result.current[action]());
+        expect(result.current.unreadCount).toBe(0);
+        await act(async () => reject());
+        // Keep the exact query object, as with an unchanged cached poll.
+        rerender();
+        expect(result.current.notifications.map((n) => n.id)).toEqual(["A"]);
+        expect(result.current.notifications[0].read).toBe(false);
+        expect(result.current.unreadCount).toBe(1);
+      } finally { cleanup(); }
+    },
+  );
+
+  it.each(["wallet", "feed", "markAllRead", "clearAll", "disconnect"] as const)(
+    "does not roll back newer %s state after an older rejection",
+    async (transition) => {
+      const { result, rerender, reject } = setup();
+      try {
+        act(() => result.current.markAllRead());
+        if (transition === "wallet") {
+          walletHook.address = "GB";
+          walletHook.feed = unreadFeed("GB", "B");
+          rerender();
+        } else if (transition === "feed") {
+          walletHook.feed = unreadFeed("GA", "new");
+          rerender();
+        } else if (transition === "disconnect") {
+          walletHook.address = null;
+          walletHook.feed = undefined;
+          rerender();
+        } else {
+          await act(async () => result.current[transition]());
+        }
+        const notifications = result.current.notifications;
+        const unreadCount = result.current.unreadCount;
+        await act(async () => reject());
+        expect(result.current.notifications).toEqual(notifications);
+        expect(result.current.unreadCount).toBe(unreadCount);
+      } finally { cleanup(); }
+    },
+  );
+
+  it("restores confirmed data when both overlapping acknowledgements reject", async () => {
+    const { result, reject } = setup();
+    let rejectLatest!: (error: Error) => void;
+    walletHook.postAction.mockImplementationOnce(() => new Promise((_, fail) => {
+      rejectLatest = fail;
+    }));
+    try {
+      act(() => result.current.markAllRead());
+      act(() => result.current.clearAll());
+      await act(async () => {
+        reject();
+        rejectLatest(new Error("offline"));
+      });
+      expect(result.current.notifications.map((n) => n.id)).toEqual(["A"]);
+      expect(result.current.notifications[0].read).toBe(false);
+      expect(result.current.unreadCount).toBe(1);
+    } finally { cleanup(); }
+  });
+});

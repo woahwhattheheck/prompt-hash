@@ -64,8 +64,9 @@ the address that started its request; a late result cannot be installed as
 another wallet's local state. While the selected wallet has no matching feed,
 the displayed notification list and unread badge are empty.
 
-Mark-all-read and local dismiss operate on the selected wallet. Their existing
-server acknowledgement and next-poll reconciliation behavior is retained.
+Mark-all-read and local dismiss operate on the selected wallet. Failed server
+acknowledgements restore the confirmed feed as described below; newer state
+invalidates an older rollback.
 
 ## Guarantees
 
@@ -95,7 +96,7 @@ wallet switch while the next feed is loading, a late response from the old
 wallet, mark-all-read, dismiss and disconnect. Wallet, query and notification
 client boundaries are controlled; React effects and rendering are real.
 
-### Exact published hook execution
+### Prior exact published hook execution
 
 Published source `f962fa3afb71b5f2c5b5b67359abf4790b892c1e` passed all
 seven cases in this file on a standard Ubuntu GitHub Actions runner. With the
@@ -130,3 +131,31 @@ application build were not run.
 The isolated execution closes the earlier local runner outage's final-source
 validation gap. Workflow scaffolding remains on the separate execution branch;
 the original contribution branch receives only this guide update.
+
+### Failed read acknowledgements (2026-10-04)
+
+Mark-all-read and local dismiss now restore the last fetched server feed when
+their acknowledgement fails. This does not rely on a later poll changing the
+query object's identity. A wallet change, fresh feed, newer action or unmount
+invalidates the pending rollback, so an older failure cannot replace newer
+display state. If overlapping requests have mixed success and failure, the
+fallback can conservatively show the last fetched unread state until the next
+changed server poll; this patch does not add concurrent-request reconciliation.
+
+The change starts from `505d81c48fae366420ffb8ad20caacc04512ffc4`.
+One focused offline check executed the complete hook function under Node
+24.19.0 with native TypeScript stripping and explicit controlled React-hook,
+wallet, query and notification-client dependencies. The previous hook blob
+`4eb9c946513cad5a550297afcf418ce2ab63843a` passed seven controls and failed
+three recovery cases: rejected mark-all-read, rejected dismiss, and both
+overlapping requests rejecting. The candidate hook blob
+`7e990c9effc294e84d1e555e9c385e90cb9312cd` passed all ten cases. Controls
+covered a newer wallet, feed, mark-all-read, dismiss, disconnect, wallet return,
+and unmount. Query data retained the same object in the failure recovery cases.
+
+Eight corresponding cases extend the existing
+`src/lib/notifications/sellerNotifications.test.ts` file. Those maintained
+Vitest/React tests were **not executed** for this change: the local runtime lacked
+Vitest, Testing Library and jsdom. The dependency-seam check is not a real
+React/Query integration run, and the earlier seven-case Actions receipt above
+remains pinned to its earlier source. No full build or live provider check ran.

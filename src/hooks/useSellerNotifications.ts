@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWallet } from "@/hooks/useWallet";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
@@ -30,6 +30,7 @@ export function useSellerNotifications(): UseSellerNotifications {
     notifications: SellerNotification[];
     unreadCount: number;
   }>({ wallet: address, notifications: [], unreadCount: 0 });
+  const readMutation = useRef(0);
 
   // Hide the previous wallet's feed on the first render after a switch.
   const notifications =
@@ -67,43 +68,60 @@ export function useSellerNotifications(): UseSellerNotifications {
   });
 
   useEffect(() => {
+    // A fresh server feed or wallet owns the display over pending mutations.
+    readMutation.current += 1;
     if (!address || !feed || feed.wallet !== address) {
       setLocalFeed({ wallet: address, notifications: [], unreadCount: 0 });
-      return;
+    } else {
+      setLocalFeed({
+        wallet: address,
+        notifications: feed.notifications ?? [],
+        unreadCount: feed.unreadCount ?? 0,
+      });
     }
-    setLocalFeed({
-      wallet: address,
-      notifications: feed.notifications ?? [],
-      unreadCount: feed.unreadCount ?? 0,
-    });
+    return () => {
+      readMutation.current += 1;
+    };
   }, [address, feed]);
 
   const summary = useMemo(() => summariseActivity(prompts), [prompts]);
 
-  const markAllRead = useCallback(() => {
-    if (!address) return;
-    setLocalFeed((current) => ({
-      wallet: address,
-      notifications:
-        current.wallet === address
-          ? current.notifications.map((n) => ({ ...n, read: true }))
-          : [],
-      unreadCount: 0,
-    }));
-    void postSellerNotificationAction(address, "mark-all-read").catch(() => {
-      /* best-effort; next poll reconciles */
-    });
-  }, [address]);
+  const acknowledgeRead = useCallback(
+    (dismiss: boolean) => {
+      if (!address) return;
+      const mutation = ++readMutation.current;
+      const previous =
+        localFeed.wallet === address
+          ? localFeed
+          : { wallet: address, notifications: [], unreadCount: 0 };
+      const confirmed = {
+        wallet: address,
+        notifications: feed?.wallet === address ? feed.notifications ?? [] : [],
+        unreadCount: feed?.wallet === address ? feed.unreadCount ?? 0 : 0,
+      };
+      setLocalFeed({
+        wallet: address,
+        notifications: dismiss
+          ? []
+          : previous.notifications.map((n) => ({ ...n, read: true })),
+        unreadCount: 0,
+      });
+      void postSellerNotificationAction(address, "mark-all-read").catch(() => {
+        // An unchanged cached poll may not rerun the feed effect. Restore the
+        // confirmed display only if no newer wallet, feed or action replaced it.
+        if (readMutation.current === mutation) setLocalFeed(confirmed);
+      });
+    },
+    [address, feed, localFeed],
+  );
+
+  const markAllRead = useCallback(() => acknowledgeRead(false), [acknowledgeRead]);
 
   const clearAll = useCallback(() => {
-    if (!address) return;
     // Clear is a local UI dismiss; read-set stays server-side so other devices
     // still see history. Mark all read so unread badge stays consistent.
-    setLocalFeed({ wallet: address, notifications: [], unreadCount: 0 });
-    void postSellerNotificationAction(address, "mark-all-read").catch(() => {
-      /* best-effort */
-    });
-  }, [address]);
+    acknowledgeRead(true);
+  }, [acknowledgeRead]);
 
   return {
     notifications,
