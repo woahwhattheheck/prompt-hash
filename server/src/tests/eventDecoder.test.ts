@@ -265,19 +265,25 @@ describe("unsupported versions fail safely (dead-letter)", () => {
   }
 
   it.each([
-    ["empty string", "", ""],
+    ["empty string", "", null],
     ["zero number", 0, "0"],
     ["bigint", BigInt(42), "42"],
-    ["false boolean", false, "false"],
+    ["false boolean", false, null],
   ] as const)(
-    "required prompt_id preserves %s normalization",
+    "required prompt_id enforces exact integer admission for %s",
     (_label, value, expected) => {
       const fixture = loadFixture("publish.v1.json");
       fixture.topics = { ...fixture.topics, prompt_id: value };
 
       const result = decodeEvent(fixture, { now: fixedNow });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
+      expect(result.ok).toBe(expected !== null);
+      if (!result.ok) {
+        expect(expected).toBeNull();
+        expect(result.deadLetter.reason).toBe("SCHEMA_VALIDATION_FAILED");
+        expect(result.deadLetter.message).toContain("prompt_id");
+        expect(result.deadLetter.raw).toBe(fixture);
+        return;
+      }
 
       expect(result.event.promptId).toBe(expected);
       expect(result.event.fields.prompt_id).toBe(expected);
