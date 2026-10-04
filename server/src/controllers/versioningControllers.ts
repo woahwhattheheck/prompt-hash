@@ -5,7 +5,7 @@
  * in `src/lib/domain/promptVersioningDomain.ts`.
  */
 import { Request, Response } from "express";
-import { sendDomainResult } from "../../../src/lib/domain/domainResult";
+import { internalServerError, sendDomainResult } from "../../../src/lib/domain/domainResult";
 import {
   getBuyerVersion,
   listPromptVersionHistory,
@@ -27,8 +27,8 @@ export const PostPromptUpdate = async (req: Request, res: Response): Promise<Res
       changeNote: req.body?.changeNote,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
 
@@ -39,8 +39,8 @@ export const GetPromptVersions = async (req: Request, res: Response): Promise<Re
       promptId: req.params.promptId,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
 
@@ -53,8 +53,8 @@ export const RecordPurchase = async (req: Request, res: Response): Promise<Respo
       txHash: req.body?.txHash,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
 
@@ -66,7 +66,7 @@ export const GetBuyerVersion = async (req: Request, res: Response): Promise<Resp
       buyerWallet: req.query?.buyerWallet,
     });
     return sendDomainResult(res, result) as Response;
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return sendDomainResult(res, internalServerError()) as Response;
   }
 };
