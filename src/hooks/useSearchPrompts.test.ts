@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
+import * as promptOrdering from "@/lib/prompts/promptOrdering";
 import { useFeaturedPrompts, useSearchPrompts } from "./useSearchPrompts";
 
 const { getAllPrompts, useQuery } = vi.hoisted(() => ({
@@ -94,8 +95,39 @@ describe("search fallback price bounds", () => {
     expect(result.prompts.map((p: PromptRecord) => p.id)).toEqual(expectedIds);
   });
 
+  it("does not admit out-of-range fractional-stroop prices in fallback", async () => {
+    getAllPrompts.mockResolvedValue([
+      prompt(0n, 0n),
+      prompt(1n, 1n),
+      prompt(2n, 2n),
+      prompt(3n, 3n),
+    ]);
+    for (const [filters, expectedIds] of [
+      [{ minPrice: 0.00000011 }, [3n, 2n]],
+      [{ maxPrice: 0.00000019 }, [1n, 0n]],
+      [{ minPrice: 0.00000001 }, [3n, 2n, 1n]],
+      [{ minPrice: 0.00000011, maxPrice: 0.00000019 }, []],
+    ] as const) {
+      const result = await search(filters);
+      expect(result.prompts.map((p: PromptRecord) => p.id)).toEqual(expectedIds);
+      expect(result.total).toBe(expectedIds.length);
+    }
+  });
+
+  it("supports large exponential endpoints without losing exact membership", async () => {
+    const edge = 10n ** 28n;
+    getAllPrompts.mockResolvedValue([
+      prompt(1n, edge - 1n),
+      prompt(2n, edge),
+      prompt(3n, edge + 1n),
+    ]);
+    const result = await search({ minPrice: 1e21, maxPrice: 1e21 });
+    expect(result.prompts.map((p: PromptRecord) => p.id)).toEqual([2n]);
+    expect(result.total).toBe(1);
+  });
+
   it("keeps bound parsing work constant as the listing count grows", async () => {
-    const parsing = vi.spyOn(Number.prototype, "toFixed");
+    const parsing = vi.spyOn(promptOrdering, "xlmFilterBoundToStroops");
     for (const count of [10, 10_000]) {
       getAllPrompts.mockResolvedValue(
         Array.from({ length: count }, (_, i) => prompt(BigInt(i), 15_000_000n)),
