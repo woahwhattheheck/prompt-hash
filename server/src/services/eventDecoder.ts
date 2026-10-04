@@ -65,7 +65,7 @@ export interface CanonicalLifecycleEvent {
   txHash: string | null;
   eventIndex: number | null;
   contractId: string | null;
-  /** Normalized payload fields (addresses lowercased, integers as strings). */
+  /** Normalized payload fields (strings preserved, integers as strings). */
   fields: Record<string, string | null>;
 }
 
@@ -91,27 +91,13 @@ export type DecodeFailure = {
 
 export type DecodeResult = DecodeSuccess | DecodeFailure;
 
-const ADDRESS_KEYS = new Set([
-  "creator",
-  "buyer",
-  "seller",
-  "asset",
-  "referrer",
-  "submitter",
-  "reviewer",
-  "admin",
-  "signer",
-  "caller",
-  "proposer",
-  "new_fee_wallet",
-]);
-
 function isSupportedVersion(v: number): v is SupportedSchemaVersion {
   return (SUPPORTED_SCHEMA_VERSIONS as readonly number[]).includes(v);
 }
 
 function asString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
+  // Stellar StrKeys are case-sensitive; never case-fold address strings.
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "bigint") return String(value);
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -123,14 +109,6 @@ function eventNameForMessage(value: unknown): string {
   if (value === null) return "null";
   // Parsed JSON can contain an object whose toString is not callable.
   return asString(value) ?? `[${typeof value}]`;
-}
-
-function normalizeField(key: string, value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  const str = asString(value);
-  if (str === null) return null;
-  if (ADDRESS_KEYS.has(key)) return str.toLowerCase();
-  return str;
 }
 
 function resolveLifecycle(raw: EventEnvelope): {
@@ -279,7 +257,7 @@ export function decodeEvent(
 
   // Required values must remain present after primitive normalization.
   const invalidRequired = required.filter(
-    (key) => normalizeField(key, merged[key]) === null,
+    (key) => asString(merged[key]) === null,
   );
   if (invalidRequired.length > 0) {
     return finish(
@@ -300,7 +278,7 @@ export function decodeEvent(
 
   const fields: Record<string, string | null> = {};
   for (const key of [...required, ...optionalKeys]) {
-    fields[key] = normalizeField(key, merged[key]);
+    fields[key] = asString(merged[key]);
   }
 
   // referrer is Optional<Address> on PromptPurchased — keep explicit null.

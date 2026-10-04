@@ -69,9 +69,10 @@ Decoder entrypoint: `decodeEvent()` in `server/src/services/eventDecoder.ts`.
 | `SCHEMA_VALIDATION_FAILED` | Required field missing, null or nonprimitive      | Inspect producer / RPC decoding bugs                                |
 | `CORRUPT_PAYLOAD`          | Envelope not an object / bad `schemaVersion` type | Drop or repair upstream serialization                               |
 
-Required payload fields must normalize to strings. Strings, numbers, bigints
-and booleans retain their existing normalization, including lowercasing for
-address fields. An object or array in a required field is rejected with
+Required payload fields must normalize to strings. String spelling is preserved
+exactly, including case-sensitive Stellar account and contract StrKeys. Numbers,
+bigints and booleans retain their existing string conversion. An object or array
+in a required field is rejected with
 `SCHEMA_VALIDATION_FAILED`, rather than producing a successful event with a
 null required value. Missing or null required fields keep their existing
 missing-field diagnostic. Optional fields retain their prior projection,
@@ -88,7 +89,7 @@ Event-name diagnostics preserve primitive labels and describe nonprimitive
 values by type without invoking their conversion methods. For example, parsed
 JSON with `contractEvent: {"toString": null}` remains an `UNKNOWN_EVENT_TYPE`
 failure and can reach the sink. The original envelope stays in `raw`; the
-dead-letter `contractEvent` and `lifecycle` metadata remain strings or null.
+ dead-letter `contractEvent` and `lifecycle` metadata remain strings or null.
 This also applies to failures returned before event-name resolution, such as
 unsupported versions and corrupt schema-version values. Existing valid
 lifecycle precedence and contract-event fallback remain available.
@@ -105,6 +106,34 @@ cd server && npm test -- --testPathPatterns=eventDecoder
 Supported fixtures must decode deterministically (identical canonical JSON on
 repeated runs). Unsupported fixtures must return `{ ok: false, deadLetter }`
 without throwing.
+
+## Address preservation regression
+
+Address fields must not be lowercased: the Stellar StrKey decoder checks the
+canonical base32 encoding before accepting the checksum. See the
+[official decoder](https://stellar.github.io/js-stellar-base/strkey.js.html).
+The six golden fixtures now retain their original payload address spelling;
+this correction does not add address validation or repair malformed addresses.
+Consumers that persisted lowercased output should re-decode the original raw
+events rather than change unrelated identifiers or opaque strings.
+
+A dependency-free focused check imports the complete production decoder using
+Node's native TypeScript stripping. From `server/`, on Node 22.16 or newer:
+
+```sh
+node --experimental-strip-types --test tests/event-address-roundtrip.cjs
+```
+
+On Node 22.16.0, the repaired source passes all 16 checks; preceding source
+`3c5fea2467cb77e924cbaa0d6261e400e2b0f1d0` fails 14 of those same checks when
+using the corrected golden expectations. The check verifies account/contract
+payload bytes and CRC16-XModem with an independent reference decoder across
+publish, purchase and unlock in both supported versions. It also checks the
+six golden projections, topic precedence, exact string preservation, null
+referrers, deterministic output, unchanged input and dead-letter behavior.
+The standalone production module passes strict TypeScript 5.8.3 compilation.
+These are native source checks, not an installed Stellar SDK, full Jest suite,
+live RPC/indexer, or hosted CI run. Existing Jest coverage is unchanged.
 
 ## Related code
 
