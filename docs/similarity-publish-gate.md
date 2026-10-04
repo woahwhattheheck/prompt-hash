@@ -56,6 +56,21 @@ A successful HTTP response means the Prompt decision and its audit are committed
 
 An exact replay of the latest stored override returns `replayed: true` and can retry only the appeal copy, without another Prompt decision update or audit append. A different actor, reason, or intervening scan cannot use that replay. The stored appeal preconditions are retained in the required audit for recovery. This route does not change the authority or behavior of other appeal endpoints.
 
+## Scoring cost
+
+Each scan now prepares the unchanged draft once and reuses its term-frequency vector across candidates. The vector is built lazily: when either normalized text is shorter than 50 characters, the existing Levenshtein calculation is still used. Candidate normalization, Unicode tokenization, cosine arithmetic, thresholds and first-match tie selection are unchanged. The cache belongs to one scan and is never shared between requests.
+
+A local measurement on Node 24.19.0/Linux compared the complete production evaluator before and after this change, using 1,000 in-memory candidates cycling the existing marketing-email, bedtime-story, Russian and Arabic sample texts. The longer draft repeats the existing 138-character marketing sample 24 times with spaces. After five warmups per version, seven alternating pairs each measured three evaluations; the table reports median milliseconds per evaluation.
+
+| Draft | Characters | Before | After | Ratio |
+| --- | --- | --- | --- | --- |
+| Marketing sample | 138 | 7.70 ms | 4.71 ms | 1.64× |
+| Repeated marketing sample | 3,335 | 57.18 ms | 4.61 ms | 12.41× |
+
+The long-draft baseline included one 209.95 ms sample; the reported value is the seven-sample median. Complete evaluation results remained identical for the measured workloads and for short text, Unicode, combining marks, an empty candidate set, allow/review decisions and first-match ties. The existing focused selection `evaluatePublishSimilarity|scanForSimilarity|computeSimilarityScore` passed 15 maintained cases on Vitest 5.0.1. Its scan cases use the existing mocked model boundary; this is not a live database result.
+
+These are deterministic scaled sample workloads, not a deployed catalog or an end-to-end request benchmark. Candidate retrieval still loads the existing collection, and database/network time and remaining publication integration work are unchanged.
+
 ## Code map
 
 - `server/src/services/similarityDetection.ts` — thresholds, decide/feedback/override

@@ -96,20 +96,26 @@ export function levenshteinRatio(a: string, b: string): number {
 // Score computation
 // ---------------------------------------------------------------------------
 
+function createSimilarityScorer(text: string): (candidate: string) => number {
+  const a = text.toLowerCase().trim();
+  let tfA: Map<string, number> | undefined;
+
+  return (candidate) => {
+    const b = candidate.toLowerCase().trim();
+    if (a.length < 50 || b.length < 50) {
+      return levenshteinRatio(a, b);
+    }
+
+    // A scan compares one unchanged draft with many candidates. Build its
+    // vector once, lazily, so short-text comparisons keep their existing path.
+    tfA ??= buildTermFrequency(tokenize(a));
+    const tfB = buildTermFrequency(tokenize(b));
+    return cosineSimilarity(tfA, tfB);
+  };
+}
+
 export function computeSimilarityScore(textA: string, textB: string): number {
-  const norm = (s: string) => s.toLowerCase().trim();
-  const a = norm(textA);
-  const b = norm(textB);
-
-  if (a.length < 50 || b.length < 50) {
-    return levenshteinRatio(a, b);
-  }
-
-  const tokensA = tokenize(a);
-  const tokensB = tokenize(b);
-  const tfA = buildTermFrequency(tokensA);
-  const tfB = buildTermFrequency(tokensB);
-  return cosineSimilarity(tfA, tfB);
+  return createSimilarityScorer(textA)(textB);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,9 +166,10 @@ export async function scanForSimilaritySync(
   let maxScore = 0;
   let mostSimilarId: string | null = null;
 
+  const scoreCandidate = createSimilarityScorer(content);
   for (const prompt of existing) {
     const candidateText = `${prompt.title ?? ""} ${prompt.content ?? ""}`;
-    const score = computeSimilarityScore(content, candidateText);
+    const score = scoreCandidate(candidateText);
     if (score > maxScore) {
       maxScore = score;
       mostSimilarId = prompt.onChainId ?? null;
@@ -334,9 +341,10 @@ export function evaluatePublishSimilarity(
   let maxScore = 0;
   let mostSimilarId: string | null = null;
 
+  const scoreCandidate = createSimilarityScorer(content);
   for (const prompt of candidates) {
     const candidateText = `${prompt.title ?? ""} ${prompt.content ?? ""}`;
-    const score = computeSimilarityScore(content, candidateText);
+    const score = scoreCandidate(candidateText);
     if (score > maxScore) {
       maxScore = score;
       mostSimilarId = prompt.onChainId ?? null;
@@ -449,3 +457,4 @@ export function withOverride(
     overridden: true,
   };
 }
+
