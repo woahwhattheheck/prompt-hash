@@ -44,6 +44,13 @@ export class PayoutStatementPeriodError extends RangeError {
   }
 }
 
+export class PayoutStatementStatusError extends RangeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PayoutStatementStatusError";
+  }
+}
+
 function validatePayoutPeriod(
   periodStart: unknown,
   periodEnd: unknown,
@@ -178,6 +185,19 @@ function buildRefundLine(
 export function deriveStatementStatus(
   attempts: PayoutAttemptLineItem[],
 ): { status: PayoutSettlementStatus; failureReason?: string; payoutTxHash?: string } {
+  // Unknown or missing attempt statuses must never imply settlement, even
+  // when another row would otherwise short-circuit to failed or pending.
+  for (const attempt of attempts) {
+    if (
+      attempt.status !== "pending" &&
+      attempt.status !== "settled" &&
+      attempt.status !== "failed"
+    ) {
+      throw new PayoutStatementStatusError(
+        "payoutAttempts.status must be pending, settled, or failed",
+      );
+    }
+  }
   if (attempts.length === 0) {
     return { status: "pending" };
   }

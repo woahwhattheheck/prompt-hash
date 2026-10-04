@@ -7,6 +7,7 @@ import PayoutStatementModel from "../models/PayoutStatement";
 import {
   PayoutStatementAmountError,
   PayoutStatementPeriodError,
+  PayoutStatementStatusError,
   aggregateSellerStatementFromDb,
   exportStatementToCsv,
   exportStatementToJson,
@@ -55,7 +56,8 @@ payoutRouter.get(
       res
         .status(
           err instanceof PayoutStatementAmountError ||
-            err instanceof PayoutStatementPeriodError
+            err instanceof PayoutStatementPeriodError ||
+            err instanceof PayoutStatementStatusError
             ? 400
             : 500,
         )
@@ -196,7 +198,8 @@ payoutRouter.post("/statements/generate", async (req: Request, res: Response) =>
     res
       .status(
         err instanceof PayoutStatementAmountError ||
-          err instanceof PayoutStatementPeriodError
+          err instanceof PayoutStatementPeriodError ||
+          err instanceof PayoutStatementStatusError
           ? 400
           : 500,
       )
