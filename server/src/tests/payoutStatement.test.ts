@@ -32,6 +32,7 @@ import {
   platformFeeStroops,
 } from "../constants/platformFee";
 import {
+  aggregateSellerStatementFromDb,
   deriveStatementStatus,
   exportStatementToCsv,
   exportStatementToJson,
@@ -960,5 +961,145 @@ describe("CSV / JSON export", () => {
     });
     expect(statement.payoutAddress).toBe("gexistingpayoutfromsettings");
     expect(statement.sellerWallet).toBe("gcreatorwallet");
+  });
+});
+
+describe("database refund purchase lookup batching", () => {
+  const period = {
+    start: "2026-01-01T00:00:00.000Z",
+    end: "2026-01-31T23:59:59.999Z",
+  };
+  const historicalAt = "2025-12-15T12:00:00.000Z";
+  const currentAt = "2026-01-10T12:00:00.000Z";
+  const refundedAt = "2026-01-20T12:00:00.000Z";
+  const options = {
+    sellerWallet: "GSELLER",
+    periodStart: period.start,
+    periodEnd: period.end,
+    priorSettledPeriodEnd: "2025-12-31T23:59:59.999Z",
+    previousBalanceCarryoverStroops: -17,
+  };
+  type Pair = { promptId: string; buyerWallet: string };
+  type StoredPurchase = Pair & { _id: string; createdAt: string };
+  type StoredRefund = Pair & { createdAt: string; updatedAt: string };
+
+  function mockDatabase(purchases: StoredPurchase[], refunds: StoredRefund[]) {
+    jest.clearAllMocks();
+    (User.findOne as jest.Mock).mockReturnValue({
+      lean: async () => ({ _id: "seller", payoutSettings: { payoutAddress: "GDEST" } }),
+    });
+    (Prompt.find as jest.Mock).mockReturnValue({
+      select: () => ({
+        lean: async () => [
+          { onChainId: "Prompt-A", price: 10 },
+          { onChainId: "prompt-a", price: 20 },
+        ],
+      }),
+    });
+    (FulfillmentRecord.find as jest.Mock).mockReturnValue({ lean: async () => refunds });
+    const matchesPair = (purchase: StoredPurchase, pair: Pair) =>
+      purchase.promptId === pair.promptId &&
+      purchase.buyerWallet === pair.buyerWallet.toLowerCase();
+    (Purchase.find as jest.Mock).mockImplementation((query: { $or?: Pair[] }) => ({
+      lean: async () => query.$or
+        ? purchases.filter((purchase) => query.$or!.some((pair) => matchesPair(purchase, pair))).reverse()
+        : purchases.filter((purchase) => isWithinPeriod(purchase.createdAt, period.start, period.end)),
+    }));
+    (Purchase.findOne as jest.Mock).mockImplementation((pair: Pair) => ({
+      lean: async () => purchases.find((purchase) => matchesPair(purchase, pair)) ?? null,
+    }));
+  }
+
+  it.each([0, 100, 101, 1000])("bounds historical purchase queries for %i refunds", async (count) => {
+    const purchases = Array.from({ length: count }, (_, index) => ({
+      _id: `purchase-${index}`,
+      promptId: "Prompt-A",
+      buyerWallet: `buyer-${index}`,
+      createdAt: historicalAt,
+    }));
+    mockDatabase(purchases, purchases.map((purchase) => ({ ...purchase, updatedAt: refundedAt })));
+
+    const statement = await aggregateSellerStatementFromDb(options);
+    const expected = reconcilePayoutStatement({
+      ...options,
+      payoutAddress: "GDEST",
+      period,
+      purchases: [],
+      refunds: purchases.map((purchase) => ({
+        purchaseId: purchase._id,
+        promptId: purchase.promptId,
+        originalGrossStroops: 100_000_000,
+        originalPurchasedAt: historicalAt,
+        refundedAt,
+      })),
+      statementId: statement.statementId,
+      generatedAt: statement.generatedAt,
+    });
+    expect(statement).toEqual(expected);
+    expect(Purchase.findOne).not.toHaveBeenCalled();
+    expect(Purchase.find).toHaveBeenCalledTimes(1 + Math.ceil(count / 100));
+    expect(Purchase.find).toHaveBeenNthCalledWith(1, {
+      promptId: { $in: ["Prompt-A", "prompt-a"] },
+      createdAt: { $gte: new Date(period.start), $lte: new Date(period.end) },
+    });
+    const batches = (Purchase.find as jest.Mock).mock.calls.slice(1).map(([query]) => query);
+    for (const query of batches) {
+      expect(Object.keys(query)).toEqual(["$or"]);
+      expect(query.$or.length).toBeGreaterThan(0);
+      expect(query.$or.length).toBeLessThanOrEqual(100);
+    }
+    expect(batches.flatMap((query) => query.$or)).toEqual(
+      purchases.map(({ promptId, buyerWallet }) => ({ promptId, buyerWallet })),
+    );
+  });
+
+  it("preserves exact pairs, missing purchases, repeated refunds, and clawbacks", async () => {
+    const purchases = [
+      { _id: "historical-a", promptId: "Prompt-A", buyerWallet: "buyer-a", createdAt: historicalAt },
+      { _id: "current-b", promptId: "Prompt-A", buyerWallet: "buyer-b", createdAt: currentAt },
+      { _id: "historical-case", promptId: "prompt-a", buyerWallet: "buyer-a", createdAt: historicalAt },
+    ];
+    const pairs = [
+      { promptId: "Prompt-A", buyerWallet: "BUYER-A" },
+      { promptId: "Prompt-A", buyerWallet: "buyer-b" },
+      { promptId: "prompt-a", buyerWallet: "buyer-a" },
+      { promptId: "Prompt-A", buyerWallet: "buyer-a" },
+      { promptId: "Prompt-A", buyerWallet: "MISSING-BUYER" },
+    ];
+    mockDatabase(purchases, pairs.map((pair) => ({
+      ...pair, createdAt: currentAt, updatedAt: refundedAt,
+    })));
+    const statement = await aggregateSellerStatementFromDb(options);
+    const expectedRefunds = [
+      { purchaseId: "historical-a", promptId: "Prompt-A", originalGrossStroops: 100_000_000, originalPurchasedAt: historicalAt },
+      { purchaseId: "current-b", promptId: "Prompt-A", originalGrossStroops: 100_000_000, originalPurchasedAt: currentAt },
+      { purchaseId: "historical-case", promptId: "prompt-a", originalGrossStroops: 200_000_000, originalPurchasedAt: historicalAt },
+      { purchaseId: "historical-a", promptId: "Prompt-A", originalGrossStroops: 100_000_000, originalPurchasedAt: historicalAt },
+      { purchaseId: "Prompt-A:MISSING-BUYER", promptId: "Prompt-A", originalGrossStroops: 100_000_000, originalPurchasedAt: currentAt },
+    ];
+    const expected = reconcilePayoutStatement({
+      ...options,
+      payoutAddress: "GDEST",
+      period,
+      purchases: [{
+        purchaseId: "current-b", promptId: "Prompt-A", buyerWallet: "buyer-b",
+        grossStroops: 100_000_000, purchasedAt: currentAt,
+      }],
+      refunds: expectedRefunds.map((refund) => ({ ...refund, refundedAt })),
+      statementId: statement.statementId,
+      generatedAt: statement.generatedAt,
+    });
+    expect(statement).toEqual(expected);
+    expect(statement.refunds.map((refund) => refund.isClawback)).toEqual([true, false, true, true, false]);
+    expect(exportStatementToCsv(statement)).toBe(exportStatementToCsv(expected));
+    expect(exportStatementToJson(statement)).toBe(exportStatementToJson(expected));
+    expect(Purchase.findOne).not.toHaveBeenCalled();
+    expect(Purchase.find).toHaveBeenCalledTimes(2);
+    expect(Purchase.find).toHaveBeenLastCalledWith({ $or: [
+      { promptId: "Prompt-A", buyerWallet: "buyer-a" },
+      { promptId: "Prompt-A", buyerWallet: "buyer-b" },
+      { promptId: "prompt-a", buyerWallet: "buyer-a" },
+      { promptId: "Prompt-A", buyerWallet: "missing-buyer" },
+    ] });
   });
 });

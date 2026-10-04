@@ -129,6 +129,41 @@ retain seven decimal places. The existing handling of invalid numeric values is
 unchanged; the server still rejects those values before statement generation.
 JSON and CSV monetary fields remain integer stroops.
 
+## Refund aggregation query budget
+
+Historical purchases for refunds are loaded in batches of at most 100 distinct
+`(promptId, buyerWallet)` pairs. This uses the existing unique compound purchase
+index. Buyer wallets are lowercased as in the purchase schema; prompt ID case is
+preserved. These historical lookups deliberately have no purchase-date bound,
+so a refund can still claw back a sale from an earlier statement period. Missing
+purchases retain the fulfillment record's fallback ID and date. Repeated refund
+records remain separate line items in their original order.
+
+For a seller with an owned prompt catalog, the aggregator makes four fixed model
+queries plus `ceil(distinct refund pairs / 100)` historical purchase queries.
+With no refunds, it makes no historical lookup. Previously it issued one serial
+historical purchase query per refund record.
+
+| Refund records / distinct pairs | Previous model calls | Batched model calls |
+| --- | ---: | ---: |
+| 0 / 0 | 4 | 4 |
+| 100 / 100 | 104 | 5 |
+| 101 / 101 | 105 | 6 |
+| 1,000 / 1,000 | 1,004 | 14 |
+| 5 / 4, mixed pair controls | 9 | 5 |
+
+These counts were observed by running the complete preceding and updated
+production aggregation, reconciliation, signing, and export code on Node
+24.19.0 with recorded model boundaries. Holding clock and UUID metadata fixed
+with a synthetic signing secret produced equal complete statements, signatures,
+CSV, and JSON in every case. Mixed controls cover different buyers of one
+prompt, prompt ID case, wallet case normalization, historical purchases, a
+missing purchase, repeated refunds, and reversed batch-result order. This
+replay measures model-call reduction, not live MongoDB latency. Five focused
+regressions were added to the existing Jest file; that extended Jest suite was
+not run for this batching continuation because its retained dependencies were
+unavailable.
+
 ## Tests
 
 ```bash
@@ -170,7 +205,7 @@ cd server
 npm test -- --testPathPatterns=payoutStatement --runInBand --no-cache
 ```
 
-It passes 80 tests: the 54 existing cases plus 23 period-rejection regressions
+That period-validation run passed 80 tests: the 54 existing cases plus 23 period-rejection regressions
 and three valid inclusive-boundary controls. Applying the same extended test file
 to the preceding implementation produces 23 failures and 57 passes. Retained
 Jest 30.2.0, ts-jest 29.4.12, and Supertest 7.2.2 were used; the existing model

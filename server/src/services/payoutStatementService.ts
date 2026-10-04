@@ -484,17 +484,48 @@ export async function aggregateSellerStatementFromDb(
     updatedAt: { $gte: periodStartDate, $lte: periodEndDate },
   }).lean();
 
-  const refundEvents: RefundEventInput[] = [];
-  for (const f of refundRecords as Array<{
+  type RefundRecord = {
     promptId: string;
     buyerWallet: string;
     updatedAt: Date | string;
     createdAt: Date | string;
-  }>) {
-    const matchingPurchase = await Purchase.findOne({
-      promptId: f.promptId,
-      buyerWallet: f.buyerWallet,
+  };
+  type RefundPurchase = {
+    _id: { toString(): string };
+    promptId: string;
+    buyerWallet: string;
+    createdAt: Date | string;
+  };
+  const records = refundRecords as RefundRecord[];
+  // Purchase's unique compound index identifies one entitlement per pair.
+  // Match its buyerWallet lowercase setter without changing prompt ID case.
+  const purchaseKey = (record: { promptId: string; buyerWallet: string }) =>
+    JSON.stringify([record.promptId, record.buyerWallet.toLowerCase()]);
+  const pairs = new Map<string, { promptId: string; buyerWallet: string }>();
+  for (const record of records) {
+    pairs.set(purchaseKey(record), {
+      promptId: record.promptId,
+      buyerWallet: record.buyerWallet.toLowerCase(),
+    });
+  }
+
+  const purchaseByPair = new Map<string, RefundPurchase>();
+  const lookupPairs = [...pairs.values()];
+  const batchSize = 100;
+  for (let offset = 0; offset < lookupPairs.length; offset += batchSize) {
+    // Do not restrict purchase dates: a refund may claw back an earlier period.
+    const matches = await Purchase.find({
+      $or: lookupPairs.slice(offset, offset + batchSize),
     }).lean();
+    for (const purchase of matches as RefundPurchase[]) {
+      const key = purchaseKey(purchase);
+      if (!purchaseByPair.has(key)) purchaseByPair.set(key, purchase);
+    }
+  }
+
+  const refundEvents: RefundEventInput[] = [];
+  for (const f of records) {
+    const matchingPurchase = purchaseByPair.get(purchaseKey(f));
     const priceXlm = promptById.get(f.promptId)?.price ?? 0;
     const purchasedAt = matchingPurchase
       ? new Date(
