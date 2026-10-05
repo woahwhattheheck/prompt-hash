@@ -77,6 +77,23 @@ address text. String spelling remains unchanged and case-sensitive. Missing or
 null required fields keep their existing diagnostic. Optional fields retain
 their prior primitive projection behavior.
 
+### Additive field names
+
+Canonical payload fields are own enumerable data properties, including names
+such as `__proto__` supplied by parsed JSON. Defining each property explicitly
+keeps the existing ordinary object prototype and avoids interpreting that key
+as a prototype setter. Required-field insertion order, sorted optional-key
+insertion, topic precedence, and the existing string/null conversion remain
+unchanged. This addresses field loss; it does not introduce another schema
+version or change which payload values are accepted.
+
+This source correction continues [PR #276](https://github.com/Prompt-Hash-Stellar/prompt-hash/pull/276)
+from head `d7023c6d84c92468c65dfb6bffd0c62ffe69c313` and decoder blob
+`64a2aca10607471f12f41a8f728ad38633836515`. It was reviewed from complete
+production source and exact source changes only. No decoder execution, new
+fixture, test run, live indexer/RPC use, or hosted acceptance was performed for
+this continuation. The dated validation records below remain historical.
+
 In-process sink: `InMemoryEventDeadLetter` + `routeToDeadLetter()` in
 `server/src/services/eventDeadLetter.ts`. The routing helper logs synchronous
 sink errors and rejected persistence promises without interrupting the indexer

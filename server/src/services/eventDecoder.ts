@@ -321,7 +321,13 @@ export function decodeEvent(
 
   const fields: Record<string, string | null> = {};
   for (const key of [...required, ...optionalKeys]) {
-    fields[key] = asString(merged[key]);
+    // Additive JSON keys such as __proto__ must remain own data properties.
+    Object.defineProperty(fields, key, {
+      value: asString(merged[key]),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
 
   const event: CanonicalLifecycleEvent = {
