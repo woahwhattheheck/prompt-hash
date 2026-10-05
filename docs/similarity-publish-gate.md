@@ -4,17 +4,19 @@ Issue: [#242](https://github.com/Prompt-Hash-Stellar/prompt-hash/issues/242)
 
 ## Purpose
 
-The current `/sell` form checks the draft against indexed prompts and maps the similarity score to a **pre-submission decision**. These are form decisions; the persistence and live-submission limits below are part of the current workflow:
+The current `/sell` form requests server admission for the exact creator and draft before encryption or listing. Similarity maps to the following decisions; held drafts require an authenticated maintainer decision before submission can continue:
 
 | Score | Detection flag | Decision | Behavior |
 | --- | --- | --- | --- |
 | `< 0.70` | `clean` | **allow** | The form can continue to the listing helper |
-| `0.70 ≤ score < 0.90` | `suspicious` | **review** | First submission stops for acknowledgment; an acknowledged review can continue to the same listing helper |
-| `≥ 0.90` | `highly_similar` | **block** | This form stops and disables submission for the current blocked result |
+| `0.70 ≤ score < 0.90` | `suspicious` | **review** | Persist the exact draft commitment and hold before encryption/listing until an authorized maintainer allows it |
+| `≥ 0.90` | `highly_similar` | **block** | Persist the exact draft commitment and stop before encryption/listing; revision or an authorized maintainer decision is required |
 
 ## API
 
-- `POST /api/fingerprint/publish-check` — body `{ title, content, excludeOnChainId? }` → `{ decision, score, similarTo, flag, feedback }`
+- `POST /api/fingerprint/publication-review` — body `{ creatorAddress, title, content }`; compare clean drafts without persistence, or create/reuse the exact held draft decision
+- `PATCH /api/fingerprint/publication-review/:id` — authenticated administrator decision using audience `prompt-hash:publication-review`; append an audited version-guarded decision
+- `POST /api/fingerprint/publish-check` — read-only comparison, body `{ title, content, excludeOnChainId? }` → `{ decision, score, similarTo, flag, feedback }`
 - `POST /api/fingerprint/scan` — administrator-only rescan of an existing indexed prompt; body `{ promptId, text }` requires non-empty strings. This endpoint persists moderation evidence.
 - `POST /api/fingerprint/override` — authenticated maintainer override; body `{ promptId, newDecision, reason, appealId? }`, response `{ override, result, replayed, appealSync? }`
 - `POST /api/appeals` — public filing of a creator false-positive request; existing read routes remain public
