@@ -4,8 +4,19 @@
  * This should NOT reach production.
  * TODO: Restore real Soroban contract integration before release.
  */
+import { Address, xdr } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 import { isDemoMarketplaceEnabled } from "@/lib/marketplace/demoMode";
+import { approveNativeAssetSpend } from "./nativeAssetClient";
+import {
+  getRpcServer,
+  prepareContractCall,
+  readSimulationResult,
+  scValArg,
+  simulateContractCall,
+  submitPreparedTransaction,
+  type WalletTransactionSigner,
+} from "./tx";
 
 let hasWarnedMock = false;
 const warnMockUse = () => {
@@ -96,43 +107,148 @@ export class PromptHashClient {
   static async purchasePrompt(
     itemId: string,
     userAddress: string,
-    options?: { forceFailure?: string; delay?: number },
+    options?: {
+      forceFailure?: string;
+      delay?: number;
+      live?: {
+        config: PromptHashConfig;
+        signer: WalletTransactionSigner;
+      };
+      signal?: AbortSignal;
+      onPhase?: (phase: "signature" | "network" | "confirming") => void;
+    },
   ): Promise<{ txHash: string; success: boolean }> {
-    warnMockUse();
+    if (!options?.live) {
+      warnMockUse();
 
-    // Production builds must never invent synthetic hashes (#154).
-    if (import.meta.env.PROD) {
+      if (import.meta.env.PROD) {
+        throw new Error(
+          "[release-safety] Live marketplace purchase requires a connected wallet signer (#154).",
+        );
+      }
+
+      if (!isDemoMarketplaceEnabled()) {
+        throw new Error(
+          "[release-safety] Mock purchase requires opt-in demo marketplace mode (?demo=1, ?e2e=1, or VITE_ENABLE_DEMO_MARKETPLACE=1). Stochastic / synthetic hashes are disabled (#154).",
+        );
+      }
+
+      const { demoTxHashFor } = await import(
+        "@/lib/marketplace/demo/demoMarketplaceAdapter"
+      );
+
+      return new Promise((resolve, reject) => {
+        const delay = options?.delay ?? 2000;
+        setTimeout(() => {
+          if (options?.forceFailure) {
+            return reject(new Error(options.forceFailure));
+          }
+
+          void itemId;
+          void userAddress;
+          resolve({ txHash: demoTxHashFor("success"), success: true });
+        }, delay);
+      });
+    }
+
+    const { config, signer } = options.live;
+    const signal = options.signal;
+    const assertNotAborted = () => {
+      if (signal?.aborted) {
+        const error = new Error("Purchase aborted.");
+        error.name = "AbortError";
+        throw error;
+      }
+    };
+
+    const promptId = BigInt(itemId);
+    assertNotAborted();
+
+    const promptRead = await simulateContractCall(
+      config,
+      userAddress,
+      config.promptHashContractId,
+      "get_prompt",
+      [scValArg(promptId, "u64")],
+    );
+    const prompt = readSimulationResult(promptRead.simulation) as {
+      price_stroops?: bigint;
+      asset?: unknown;
+    };
+    const paymentAmountStroops = prompt?.price_stroops;
+    if (typeof paymentAmountStroops !== "bigint" || paymentAmountStroops <= 0n) {
+      throw new Error("[release-safety] Live prompt price is unavailable.");
+    }
+
+    const paymentAsset =
+      typeof prompt.asset === "string"
+        ? prompt.asset
+        : prompt.asset instanceof Address
+          ? prompt.asset.toString()
+          : String(prompt.asset ?? "");
+    if (paymentAsset !== config.nativeAssetContractId) {
       throw new Error(
-        "[release-safety] PromptHashClient.purchasePrompt mock is disabled in production. Use the live marketplace adapter / Soroban path (#154).",
+        "[release-safety] Marketplace purchase asset does not match the configured native asset contract.",
       );
     }
 
-    // Outside opt-in demo/e2e/test mode, refuse silent mock success.
-    if (!isDemoMarketplaceEnabled()) {
-      throw new Error(
-        "[release-safety] Mock purchase requires opt-in demo marketplace mode (?demo=1, ?e2e=1, or VITE_ENABLE_DEMO_MARKETPLACE=1). Stochastic / synthetic hashes are disabled (#154).",
-      );
-    }
+    const latestLedger = await getRpcServer(config).getLatestLedger();
+    assertNotAborted();
+    options.onPhase?.("signature");
 
-    // This import is unreachable in production and can be removed by Vite.
-    const { demoTxHashFor } = await import(
-      "@/lib/marketplace/demo/demoMarketplaceAdapter"
+    await approveNativeAssetSpend(
+      config,
+      signer,
+      userAddress,
+      config.promptHashContractId,
+      paymentAmountStroops,
+      latestLedger.sequence + 120,
     );
 
-    return new Promise((resolve, reject) => {
-      const delay = options?.delay ?? 2000;
-      setTimeout(() => {
-        if (options?.forceFailure) {
-          return reject(new Error(options.forceFailure));
-        }
+    assertNotAborted();
+    options.onPhase?.("network");
 
-        // Deterministic demo hash (no Math.random).
-        const mockHash = demoTxHashFor("success");
-        void itemId;
-        void userAddress;
-        resolve({ txHash: mockHash, success: true });
-      }, delay);
-    });
+    const prepared = await prepareContractCall(
+      config,
+      userAddress,
+      config.promptHashContractId,
+      "buy_prompt",
+      [
+        scValArg(userAddress, "address"),
+        scValArg(promptId, "u64"),
+        xdr.ScVal.scvVoid(),
+        scValArg(paymentAmountStroops, "i128"),
+        xdr.ScVal.scvVoid(),
+      ],
+    );
+    const submitted = await submitPreparedTransaction(
+      config,
+      prepared,
+      signer,
+      userAddress,
+    );
+
+    assertNotAborted();
+    options.onPhase?.("confirming");
+
+    const accessRead = await simulateContractCall(
+      config,
+      userAddress,
+      config.promptHashContractId,
+      "has_access",
+      [scValArg(userAddress, "address"), scValArg(promptId, "u64")],
+    );
+    if (readSimulationResult(accessRead.simulation) !== true) {
+      throw new Error(
+        "[release-safety] Purchase reached the ledger but access is not yet authoritative.",
+      );
+    }
+
+    const txHash =
+      (submitted as { txHash?: string }).txHash ??
+      prepared.preparedTransaction.hash().toString("hex");
+
+    return { txHash, success: true };
   }
 
   static async getAllPrompts(
@@ -193,13 +309,69 @@ export class PromptHashClient {
   }
 
   static async createPrompt(
-    _config: PromptHashConfig,
-    _walletSignerLike: any,
-    _address: string,
-    _data: CreatePromptInput,
-  ) {
-    warnMockUse();
-    return { success: true, txHash: "tx_mock", promptId: "123" };
+    config: PromptHashConfig,
+    walletSignerLike: WalletTransactionSigner,
+    address: string,
+    data: CreatePromptInput,
+  ): Promise<{ success: true; txHash: string; promptId: bigint }> {
+    if (!/^[0-9a-fA-F]{64}$/.test(data.contentHash)) {
+      throw new Error("Prompt content hash must be a 32-byte SHA-256 hex value.");
+    }
+
+    const contentHash = Uint8Array.from(
+      data.contentHash.match(/../g)!.map((byte) => Number.parseInt(byte, 16)),
+    );
+    const listing = {
+      price: data.priceStroops,
+      asset: new Address(config.nativeAssetContractId),
+      max_supply: 0n,
+      expires_at: 0n,
+      splits: (data.splits ?? []).map((split) => ({
+        recipient: new Address(split.recipient),
+        bps: split.bps,
+      })),
+      tags: [] as string[],
+    };
+
+    const prepared = await prepareContractCall(
+      config,
+      address,
+      config.promptHashContractId,
+      "create_prompt",
+      [
+        scValArg(address, "address"),
+        scValArg(data.imageUrl, "string"),
+        scValArg(data.title, "string"),
+        scValArg(data.category, "string"),
+        scValArg(data.previewText, "string"),
+        scValArg(data.encryptedPrompt, "string"),
+        scValArg(data.encryptionIv, "string"),
+        scValArg(data.wrappedKey, "string"),
+        scValArg(contentHash),
+        scValArg(listing),
+      ],
+    );
+
+    const promptIdValue = readSimulationResult(prepared.simulation);
+    if (promptIdValue === undefined || promptIdValue === null) {
+      throw new Error("create_prompt simulation did not return a prompt id.");
+    }
+
+    const submitted = await submitPreparedTransaction(
+      config,
+      prepared,
+      walletSignerLike,
+      address,
+    );
+    const promptId =
+      typeof promptIdValue === "bigint"
+        ? promptIdValue
+        : BigInt(String(promptIdValue));
+    const txHash =
+      (submitted as { txHash?: string }).txHash ??
+      prepared.preparedTransaction.hash().toString("hex");
+
+    return { success: true, txHash, promptId };
   }
 
   static async setPromptSaleStatus(
