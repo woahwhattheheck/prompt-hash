@@ -12,6 +12,7 @@ import {
   exportStatementToCsv,
   exportStatementToJson,
   reconcilePayoutStatement,
+  signPayoutStatement,
 } from "../services/payoutStatementService";
 import type { PayoutSettlementStatus } from "../types/PayoutStatement";
 
@@ -229,20 +230,36 @@ payoutRouter.patch(
         return;
       }
 
-      const statement = await PayoutStatementModel.findOneAndUpdate(
-        { statementId },
-        {
-          status,
-          failureReason: failureReason ?? "",
-          payoutTxHash: payoutTxHash ?? "",
-        },
-        { new: true },
-      ).lean();
-
-      if (!statement) {
+      const current = await PayoutStatementModel.findOne({ statementId }).lean();
+      if (!current) {
         res.status(404).json({ error: "Payout statement not found" });
         return;
       }
+
+      const nextStatus = {
+        status,
+        failureReason: failureReason ?? "",
+        payoutTxHash: payoutTxHash ?? "",
+      };
+      const {
+        _id,
+        __v,
+        createdAt,
+        updatedAt,
+        signature: _previousSignature,
+        ...storedStatement
+      } = current as any;
+      const signature = signPayoutStatement({
+        ...storedStatement,
+        ...nextStatus,
+      });
+
+      const statement = await PayoutStatementModel.findOneAndUpdate(
+        { statementId },
+        { ...nextStatus, signature },
+        { new: true },
+      ).lean();
+
       res.json({ statement });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
