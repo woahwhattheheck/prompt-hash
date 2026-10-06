@@ -51,7 +51,7 @@ export class PayoutStatementStatusError extends RangeError {
   }
 }
 
-export function validatePayoutPeriod(
+function validatePayoutPeriod(
   periodStart: unknown,
   periodEnd: unknown,
 ): { start: number; end: number } {
