@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -22,6 +22,17 @@ describe("marketplace tx release safety (#154)", () => {
 
   it("enables demo mode under vitest", () => {
     expect(isDemoMarketplaceEnabled()).toBe(true);
+  });
+
+  it("keeps the legacy Sell entry on the canonical live listing flow", () => {
+    const legacySell = readFileSync(
+      join(process.cwd(), "src/pages/Sell.tsx"),
+      "utf8",
+    );
+    expect(legacySell).toMatch(
+      /export\s+\{\s*default\s*\}\s+from\s+["']\.\/sell\/page["']/,
+    );
+    expect(legacySell).not.toMatch(/\blistAsset\s*\(/);
   });
 
   it("keeps legacy client purchases deterministic in demo mode", async () => {
