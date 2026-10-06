@@ -130,10 +130,18 @@ const reportSchema = new mongoose.Schema(
 
 // Index for finding reports by prompt
 reportSchema.index({ promptId: 1, createdAt: -1 });
-// Duplicate open-report lookups: same reporter + prompt + reason
+// Enforce the duplicate-open-report invariant at the database boundary.
+// The unique constraint covers both open states as one key; terminal reports
+// are excluded so a later report for the same prompt/reporter/reason is allowed.
 reportSchema.index(
-  { promptId: 1, reporterAddress: 1, reason: 1, status: 1 },
-  { name: "report_duplicate_open_lookup" },
+  { promptId: 1, reporterAddress: 1, reason: 1 },
+  {
+    name: "report_unique_open",
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ["pending", "investigating"] },
+    },
+  },
 );
 
 const Report = mongoose.models.Report || mongoose.model("Report", reportSchema);
