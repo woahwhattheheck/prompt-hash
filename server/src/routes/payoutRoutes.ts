@@ -162,8 +162,17 @@ payoutRouter.post("/statements/generate", async (req: Request, res: Response) =>
       return;
     }
 
+    const usesSuppliedEvents = Array.isArray(purchases);
+    if (usesSuppliedEvents && persist !== false) {
+      res.status(400).json({
+        error:
+          "Caller-supplied payout events are preview-only; set persist=false or omit purchases to persist from canonical data",
+      });
+      return;
+    }
+
     let statement;
-    if (Array.isArray(purchases)) {
+    if (usesSuppliedEvents) {
       statement = reconcilePayoutStatement({
         sellerWallet,
         payoutAddress,
