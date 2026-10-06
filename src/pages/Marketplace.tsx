@@ -14,13 +14,6 @@ export interface MarketplaceItem {
   isSold: boolean;
 }
 
-// Purchase goes through the marketplace facade (#154).
-// Demo mode uses deterministic fixtures; production never uses stochastic outcomes.
-const buyAssetContractCall = async (itemId: string, userAddress: string) => {
-  return buyAsset(itemId, userAddress);
-};
-
-
 /** Placeholder card shown during initial data fetch (#230). */
 function MarketplaceSkeletonCard() {
   return (
@@ -55,7 +48,7 @@ function MarketplaceEmptyState() {
 
 export default function Marketplace() {
   const queryClient = useQueryClient();
-  const { address: walletAddress } = useWallet();
+  const { address: walletAddress, signTransaction } = useWallet();
   const [optimisticPurchases, setOptimisticPurchases] = useState<Set<string>>(new Set());
 
   const { markDone: markLoadDone } = usePerformanceAudit({ scope: "marketplace_load" });
@@ -83,7 +76,9 @@ export default function Marketplace() {
   const { execute, isLoading: isPurchasing } = useAsyncTransaction(
     async (itemId: string) => {
       if (!walletAddress) throw new Error("Wallet connection required.");
-      await buyAssetContractCall(itemId, walletAddress);
+      await buyAsset(itemId, walletAddress, {
+        signer: { signTransaction },
+      });
     },
     {
       pendingMessage: "Processing purchase on the Stellar network...",
