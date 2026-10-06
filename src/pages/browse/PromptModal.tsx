@@ -366,7 +366,9 @@ export const PromptModal: React.FC<PromptModalProps> = ({
     error: purchaseError,
   } = useAsyncTransaction(
     async () => {
-      if (!wallet?.address) throw new Error("Wallet connection required.");
+      if (!wallet?.address || !wallet.signTransaction) {
+        throw new Error("Wallet connection required.");
+      }
       
       // Check network state before purchase
       const networkState = detectNetworkMismatch(
@@ -383,13 +385,22 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         throw new Error("Please connect your wallet first");
       }
       
-      setStatus("AWAITING_APPROVAL");
-      // Do not invent a synthetic hash before the authoritative purchase result (#154).
-      setStatus("CONFIRMING");
-      const result = await PromptHashClient.purchasePrompt(itemId, wallet.address);
-      if (result.txHash) {
-        setTxHash(result.txHash);
-      }
+      const result = await PromptHashClient.purchasePrompt(
+        itemId,
+        wallet.address,
+        {
+          live: {
+            config: browserStellarConfig,
+            signer: { signTransaction: wallet.signTransaction },
+          },
+          onPhase: (phase) => {
+            setStatus(
+              phase === "signature" ? "AWAITING_APPROVAL" : "CONFIRMING",
+            );
+          },
+        },
+      );
+      setTxHash(result.txHash);
       return result;
     },
     {
