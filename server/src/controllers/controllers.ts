@@ -456,6 +456,22 @@ function reportAuthFailure(res: Response, err: AdminAuthError): Response<any> {
   });
 }
 
+function isMongoDuplicateKeyError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === 11000
+  );
+}
+
+function duplicateOpenReportResponse(res: Response): Response<any> {
+  return res.status(409).json({
+    error:
+      "An open report already exists for this prompt, reason, and reporter",
+  });
+}
+
 function serializeReportForAdmin(report: any) {
   const obj = typeof report.toObject === "function" ? report.toObject() : report;
   return {
@@ -561,7 +577,16 @@ export const SubmitPromptReport = async (
       statusHistory: [],
     });
 
-    await newReport.save();
+    try {
+      await newReport.save();
+    } catch (err) {
+      // The preflight find is an ergonomic fast path, not the concurrency
+      // boundary. The partial unique index closes the check-then-insert race.
+      if (isMongoDuplicateKeyError(err)) {
+        return duplicateOpenReportResponse(res);
+      }
+      throw err;
+    }
 
     // Never log free-form description / evidence notes (may contain sensitive content).
     console.log("Prompt abuse report submitted", {
@@ -697,7 +722,16 @@ export const UpdatePromptReportStatus = async (
       report.resolvedAt = null;
     }
 
-    await report.save();
+    try {
+      await report.save();
+    } catch (err) {
+      // Reopening a terminal report can race with creation/reopening of another
+      // report for the same duplicate key. Preserve the same 409 contract.
+      if (isMongoDuplicateKeyError(err)) {
+        return duplicateOpenReportResponse(res);
+      }
+      throw err;
+    }
 
     console.log("Prompt abuse report status updated", {
       reportId: String(report._id),
