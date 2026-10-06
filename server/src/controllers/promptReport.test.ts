@@ -179,6 +179,30 @@ describe("SubmitPromptReport", () => {
     expect(res.status).toHaveBeenCalledWith(409);
   });
 
+  it("returns 409 when a concurrent submit loses the unique-index race", async () => {
+    mockReportFindOne.mockResolvedValueOnce(null);
+    mockReportSave.mockRejectedValueOnce(
+      Object.assign(new Error("E11000 duplicate key"), { code: 11000 }),
+    );
+    const req: any = {
+      body: {
+        promptId: "prompt-1",
+        reporterAddress: "GABC",
+        reason: "plagiarism",
+      },
+    };
+    const res = makeRes();
+
+    await SubmitPromptReport(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringMatching(/open report already exists/i),
+      }),
+    );
+  });
+
   it("creates a report with normalized evidence", async () => {
     const req: any = {
       body: {
@@ -253,6 +277,31 @@ describe("UpdatePromptReportStatus", () => {
     await UpdatePromptReportStatus(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
     expect(report.save).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when reopening collides with another open report", async () => {
+    const report = storedReport() as any;
+    report.status = "resolved";
+    mockReportFindById.mockResolvedValueOnce(report);
+    mockReportSave.mockRejectedValueOnce(
+      Object.assign(new Error("E11000 duplicate key"), { code: 11000 }),
+    );
+
+    const req: any = {
+      params: { id: "report-1" },
+      headers: { authorization: `Bearer ${adminToken()}` },
+      body: { status: "investigating" },
+    };
+    const res = makeRes();
+
+    await UpdatePromptReportStatus(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringMatching(/open report already exists/i),
+      }),
+    );
   });
 });
 
