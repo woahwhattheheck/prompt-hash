@@ -1,3 +1,5 @@
+import type { WalletTransactionSigner } from "@/lib/stellar/tx";
+
 /** Authoritative purchase / listing phases driven by wallet → ledger → fulfillment. */
 export type MarketplaceTxPhase =
   | "idle"
@@ -47,6 +49,8 @@ export interface PurchaseFlowOptions {
   itemId: string;
   userAddress: string;
   onEvent?: MarketplaceTxListener;
+  /** Required for the live production path; demo fixtures ignore it. */
+  signer?: WalletTransactionSigner;
   /** Demo-only scenario key. Ignored in production adapter. */
   scenario?: DemoScenario;
   signal?: AbortSignal;
