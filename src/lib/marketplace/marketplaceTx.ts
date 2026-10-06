@@ -56,24 +56,27 @@ async function loadDemo() {
 
 export async function listAsset(
   input: ListAssetInput,
-  options?: { scenario?: DemoScenario },
+  options?: {
+    scenario?: DemoScenario;
+    liveSubmit?: (input: ListAssetInput) => Promise<ListAssetResult>;
+  },
 ): Promise<ListAssetResult> {
   if (isDemoMarketplaceEnabled()) {
     const demo = await loadDemo();
     return demo.demoListAsset(input, options?.scenario ?? "success");
   }
-  if (isProductionBuild()) {
-    return productionListAsset(input);
-  }
-  throw new Error(
-    "Listing mocks are disabled. Enable demo mode (?demo=1) for deterministic fixtures, or use the live listing path (#154).",
-  );
+  return productionListAsset(input, options?.liveSubmit);
 }
 
 export async function buyAsset(
   itemId: string,
   userAddress: string,
-  options?: { scenario?: DemoScenario; onEvent?: MarketplaceTxListener },
+  options?: {
+    scenario?: DemoScenario;
+    onEvent?: MarketplaceTxListener;
+    signer?: PurchaseFlowOptions["signer"];
+    signal?: AbortSignal;
+  },
 ): Promise<BuyAssetResult> {
   if (isDemoMarketplaceEnabled()) {
     const demo = await loadDemo();
@@ -83,7 +86,13 @@ export async function buyAsset(
       options?.scenario ?? "success",
     );
   }
-  return productionBuyAsset(itemId, userAddress, options?.onEvent);
+  return productionBuyAsset(
+    itemId,
+    userAddress,
+    options?.signer,
+    options?.onEvent,
+    options?.signal,
+  );
 }
 
 export async function runPurchaseFlow(
