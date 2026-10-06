@@ -5,7 +5,7 @@ jest.mock("../models/FulfillmentRecord", () => ({ __esModule: true, default: {} 
 jest.mock("../models/User", () => ({ __esModule: true, default: {} }));
 jest.mock("../models/PayoutStatement", () => ({
   __esModule: true,
-  default: { findOneAndUpdate: jest.fn() },
+  default: { findOne: jest.fn(), findOneAndUpdate: jest.fn() },
 }));
 
 import express from "express";
@@ -16,6 +16,7 @@ import {
   deriveStatementStatus,
   PayoutStatementStatusError,
   reconcilePayoutStatement,
+  signPayoutStatement,
 } from "../services/payoutStatementService";
 import type { PayoutAttemptLineItem } from "../types/PayoutStatement";
 
@@ -72,6 +73,80 @@ describe("payout attempt status admission", () => {
     expect(deriveStatementStatus([attempt("pending"), attempt("failed", "failure")])).toEqual({
       status: "failed", failureReason: "declined", payoutTxHash: "tx-failure",
     });
+  });
+
+  it("re-signs the canonical stored payload when settlement fields change", async () => {
+    const findOne = PayoutStatementModel.findOne as jest.Mock;
+    const update = PayoutStatementModel.findOneAndUpdate as jest.Mock;
+    const stored = {
+      _id: "mongo-id",
+      __v: 2,
+      createdAt: new Date("2026-02-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-02-02T00:00:00.000Z"),
+      statementId: "stmt-signature",
+      sellerWallet: "seller",
+      payoutAddress: "seller",
+      period: { start: "2026-01-01", end: "2026-01-31" },
+      feeBps: 500,
+      saleCount: 0,
+      grossStroops: 0,
+      platformFeeStroops: 0,
+      refundSellerDebitStroops: 0,
+      clawbackStroops: 0,
+      previousBalanceCarryoverStroops: 0,
+      netSettlementStroops: 0,
+      payableStroops: 0,
+      closingBalanceCarryoverStroops: 0,
+      status: "pending",
+      failureReason: "",
+      payoutTxHash: "",
+      sales: [],
+      refunds: [],
+      payoutAttempts: [],
+      generatedAt: "2026-02-01T00:00:00.000Z",
+      signature: "sha256=stale",
+    };
+    findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(stored) });
+    update.mockReturnValue({
+      lean: jest.fn().mockResolvedValue({
+        ...stored,
+        status: "settled",
+        payoutTxHash: "tx-settled",
+      }),
+    });
+
+    const response = await request(app)
+      .patch("/api/payouts/statements/stmt-signature/status")
+      .send({ status: "settled", payoutTxHash: "tx-settled" });
+
+    const {
+      _id,
+      __v,
+      createdAt,
+      updatedAt,
+      signature: _oldSignature,
+      ...canonical
+    } = stored;
+    const expectedSignature = signPayoutStatement({
+      ...canonical,
+      status: "settled",
+      failureReason: "",
+      payoutTxHash: "tx-settled",
+    });
+
+    expect(response.status).toBe(200);
+    expect(findOne).toHaveBeenCalledWith({ statementId: "stmt-signature" });
+    expect(update).toHaveBeenCalledWith(
+      { statementId: "stmt-signature" },
+      {
+        status: "settled",
+        failureReason: "",
+        payoutTxHash: "tx-settled",
+        signature: expectedSignature,
+      },
+      { new: true },
+    );
+    expect(expectedSignature).not.toBe(stored.signature);
   });
 
   it("returns HTTP 400 and does not persist invalid generation input", async () => {
