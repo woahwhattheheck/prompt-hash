@@ -1,13 +1,14 @@
 /**
  * Production marketplace transaction adapter (#154).
  *
- * Drives UI from wallet submission → ledger confirmation → fulfillment.
- * Does not invent stochastic outcomes or synthetic random hashes.
- * Does not replace the Stellar client library — delegates to PromptHashClient
- * and only accepts hashes returned by that authoritative path.
+ * Production purchases use the repository's real wallet -> Stellar ledger ->
+ * on-chain access path. Deterministic fixtures stay behind the explicit demo
+ * adapter and are never a production fallback.
  */
 
+import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import { PromptHashClient } from "@/lib/stellar/promptHashClient";
+import type { WalletTransactionSigner } from "@/lib/stellar/tx";
 import type {
   BuyAssetResult,
   ListAssetInput,
@@ -35,41 +36,64 @@ function assertAuthoritativeHash(
   return txHash;
 }
 
+/**
+ * Legacy facade hook retained for deterministic demo tests and old callers.
+ * The actual production /sell route uses the encrypted CreatePromptForm. A
+ * legacy caller may still provide a live submitter; there is no mock fallback.
+ */
 export async function productionListAsset(
-  _input: ListAssetInput,
+  input: ListAssetInput,
+  liveSubmit?: (input: ListAssetInput) => Promise<ListAssetResult>,
 ): Promise<ListAssetResult> {
-  throw new Error(
-    "Listing requires a connected wallet and the live PromptHashClient createPrompt path. Stochastic mock listing is disabled in production (#154).",
-  );
+  if (!liveSubmit) {
+    throw new Error(
+      "Live listing submission requires the encrypted CreatePromptForm / wallet contract path (#154).",
+    );
+  }
+  return liveSubmit(input);
 }
 
 export async function productionBuyAsset(
   itemId: string,
   userAddress: string,
+  signer: WalletTransactionSigner | undefined,
   onEvent?: MarketplaceTxListener,
+  signal?: AbortSignal,
 ): Promise<BuyAssetResult> {
-  emit(onEvent, {
-    phase: "signature",
-    status: "pending",
-    message: "Awaiting wallet signature...",
-  });
+  if (!signer) {
+    throw new Error("Wallet signer required for live marketplace purchase.");
+  }
 
-  emit(onEvent, {
-    phase: "network",
-    status: "pending",
-    message: "Broadcasting transaction to network...",
-  });
-
-  const result = await PromptHashClient.purchasePrompt(itemId, userAddress);
-
-  emit(onEvent, {
-    phase: "confirming",
-    status: "pending",
-    message: "Confirming transaction and granting access...",
+  const result = await PromptHashClient.purchasePrompt(itemId, userAddress, {
+    live: {
+      config: browserStellarConfig,
+      signer,
+    },
+    signal,
+    onPhase: (phase) => {
+      if (phase === "signature") {
+        emit(onEvent, {
+          phase,
+          status: "pending",
+          message: "Approve the marketplace spend in your wallet...",
+        });
+      } else if (phase === "network") {
+        emit(onEvent, {
+          phase,
+          status: "pending",
+          message: "Submitting purchase to the Stellar network...",
+        });
+      } else {
+        emit(onEvent, {
+          phase,
+          status: "pending",
+          message: "Confirming ledger state and on-chain access...",
+        });
+      }
+    },
   });
 
   const txHash = assertAuthoritativeHash(result.txHash, "purchasePrompt");
-
   emit(onEvent, {
     phase: "success",
     status: "success",
@@ -87,7 +111,9 @@ export async function productionRunPurchaseFlow(
     return await productionBuyAsset(
       options.itemId,
       options.userAddress,
+      options.signer,
       options.onEvent,
+      options.signal,
     );
   } catch (err) {
     const message =
