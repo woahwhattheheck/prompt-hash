@@ -620,7 +620,7 @@ export const GetOwnedPrompts = async (
       return res.status(400).json({ error: "walletAddress is required." });
     }
 
-    const session = requireCreatorReadSession(req, res, {
+    const session = await requireCreatorReadSession(req, res, {
       expectedAction: CREATOR_OWNED_READ,
       urlWallet: walletAddress,
     });
@@ -762,7 +762,7 @@ export const GetDraftPrompts = async (
       return res.status(400).json({ error: "walletAddress is required." });
     }
 
-    const session = requireCreatorReadSession(req, res, {
+    const session = await requireCreatorReadSession(req, res, {
       expectedAction: CREATOR_DRAFTS_READ,
       urlWallet: walletAddress,
     });
