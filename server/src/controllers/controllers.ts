@@ -665,11 +665,15 @@ export const GetSavedPrompts = async (
       return res.status(404).json({ error: "User not found." });
     }
 
-    const prompts = await Prompt.find({ savedPrompts: user._id })
+    const prompts = await Prompt.find({
+      savedPrompts: user._id,
+      listingStatus: "published",
+      isActive: true,
+    })
       .populate("owner", "username walletAddress")
       .sort({ createdAt: -1 });
 
-    return res.json(prompts);
+    return res.json(mapPromptsPublic(prompts));
   } catch (err) {
     console.error("Get saved prompts error:", err);
     return res.status(500).json({
