@@ -17,7 +17,7 @@ export const PostPromptUpdate = async (req: Request, res: Response): Promise<Res
       return res.status(400).json({ error: "promptId and content are required." });
     }
 
-    const session = requireCreatorVersionWriteSession(req, res, {
+    const session = await requireCreatorVersionWriteSession(req, res, {
       promptId: String(promptId),
       content: String(content),
     });
