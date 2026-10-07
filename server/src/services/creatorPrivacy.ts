@@ -10,13 +10,14 @@ import {
   CREATOR_OWNED_READ,
   CREATOR_VERSION_WRITE,
   CreatorSessionError,
-  authenticateCreatorSession,
   creatorSessionHttpStatus,
   digestVersionContent,
   readBearerToken,
+  verifyCreatorSessionProof,
   type CreatorSessionAction,
   type VerifiedCreatorSession,
 } from "../auth/creatorSession";
+import CreatorSessionNonce from "../models/CreatorSessionNonce";
 
 export type CreatorPrivacyEvent =
   | "creator_private_read_denied"
@@ -133,6 +134,27 @@ function rejectSessionError(res: Response, err: unknown): boolean {
   return false;
 }
 
+async function consumeDurableCreatorNonce(
+  nonce: string,
+  expiresAt: number,
+): Promise<boolean> {
+  try {
+    await CreatorSessionNonce.create({
+      _id: nonce,
+      expiresAt: new Date(expiresAt),
+    });
+    return true;
+  } catch (err) {
+    if ((err as { code?: number }).code === 11000) {
+      return false;
+    }
+    throw new CreatorSessionError(
+      "configuration",
+      "Creator session replay protection is unavailable.",
+    );
+  }
+}
+
 export function extractCreatorCredentials(req: Request): {
   sessionToken?: string;
   signature?: string;
@@ -155,14 +177,14 @@ export function extractCreatorCredentials(req: Request): {
  * Authenticate a private creator read (owned / drafts). Session address must
  * equal the URL walletAddress.
  */
-export function requireCreatorReadSession(
+export async function requireCreatorReadSession(
   req: Request,
   res: Response,
   opts: {
     expectedAction: typeof CREATOR_OWNED_READ | typeof CREATOR_DRAFTS_READ;
     urlWallet: string;
   },
-): VerifiedCreatorSession | null {
+): Promise<VerifiedCreatorSession | null> {
   const { sessionToken, signature } = extractCreatorCredentials(req);
 
   if (!sessionToken || !signature) {
@@ -180,12 +202,15 @@ export function requireCreatorReadSession(
   }
 
   try {
-    const session = authenticateCreatorSession({
+    const session = verifyCreatorSessionProof({
       sessionToken,
       signature,
       expectedAction: opts.expectedAction,
       expectedWallet: opts.urlWallet,
     });
+    if (!(await consumeDurableCreatorNonce(session.nonce, session.exp))) {
+      throw new CreatorSessionError("replay", "Session nonce already used.");
+    }
     recordCreatorPrivacyAudit({
       event: "creator_private_read_granted",
       result: "success",
@@ -213,11 +238,11 @@ export function requireCreatorReadSession(
  * Authenticate a creator version write. Binds creator, promptId, and content
  * digest. Ignores body walletAddress for identity.
  */
-export function requireCreatorVersionWriteSession(
+export async function requireCreatorVersionWriteSession(
   req: Request,
   res: Response,
   opts: { promptId: string; content: string },
-): VerifiedCreatorSession | null {
+): Promise<VerifiedCreatorSession | null> {
   const { sessionToken, signature } = extractCreatorCredentials(req);
 
   if (!sessionToken || !signature) {
@@ -237,13 +262,16 @@ export function requireCreatorVersionWriteSession(
   const contentDigest = digestVersionContent(opts.content);
 
   try {
-    const session = authenticateCreatorSession({
+    const session = verifyCreatorSessionProof({
       sessionToken,
       signature,
       expectedAction: CREATOR_VERSION_WRITE,
       expectedPromptId: opts.promptId,
       expectedContentDigest: contentDigest,
     });
+    if (!(await consumeDurableCreatorNonce(session.nonce, session.exp))) {
+      throw new CreatorSessionError("replay", "Session nonce already used.");
+    }
     recordCreatorPrivacyAudit({
       event: "creator_version_write_granted",
       result: "success",
