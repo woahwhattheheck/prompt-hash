@@ -227,6 +227,46 @@ describe("GET /api/prompts — public projection", () => {
   });
 });
 
+describe("GET saved prompts — public projection", () => {
+  it("queries only published active records and omits prompt content", async () => {
+    mockUserFindOne.mockResolvedValueOnce({
+      _id: "buyer-1",
+      walletAddress: "gsavedbuyer",
+    });
+    chainFind([
+      {
+        _id: "saved-1",
+        title: "Saved listing",
+        content: "SAVED BODY",
+        listingStatus: "published",
+        isActive: true,
+        owner: { username: "creator", walletAddress: "gcreator" },
+      },
+    ]);
+
+    const res = await request(buildApp()).get(
+      "/api/prompts/buyer/GSAVEDBUYER/saved",
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockPromptFind).toHaveBeenCalledWith({
+      savedPrompts: "buyer-1",
+      listingStatus: "published",
+      isActive: true,
+    });
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toEqual(
+      expect.objectContaining({
+        id: "saved-1",
+        title: "Saved listing",
+        listingStatus: "published",
+      }),
+    );
+    expect(res.body[0]).not.toHaveProperty("content");
+    expect(JSON.stringify(res.body)).not.toContain("SAVED BODY");
+  });
+});
+
 describe("GET owned / drafts — cross-wallet matrix", () => {
   it("rejects unauthenticated owned read", async () => {
     const res = await request(buildApp()).get(
