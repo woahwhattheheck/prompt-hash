@@ -56,6 +56,11 @@ jest.mock("../models/AuditLog", () => ({
   AuditLog: { create: jest.fn() },
 }));
 
+jest.mock("../models/CreatorSessionNonce", () => ({
+  __esModule: true,
+  default: { create: jest.fn() },
+}));
+
 jest.mock("../services/promptVersioning", () => ({
   publishPromptVersion: jest.fn().mockResolvedValue({ versionIndex: 2 }),
 }));
@@ -93,6 +98,7 @@ import User from "../models/User";
 import Prompt from "../models/Prompt";
 import PromptVersion from "../models/PromptVersion";
 import Purchase from "../models/Purchase";
+import CreatorSessionNonce from "../models/CreatorSessionNonce";
 import serverlessVersionHandler from "../../../api/prompts/version";
 import { publishPromptVersion } from "../services/promptVersioning";
 import { promptRouter } from "./promptRoutes";
@@ -102,6 +108,8 @@ const mockUserFindOne = User.findOne as jest.Mock;
 const mockPromptFind = Prompt.find as jest.Mock;
 const mockPromptFindOne = Prompt.findOne as jest.Mock;
 const mockPublish = publishPromptVersion as jest.Mock;
+const mockCreatorSessionNonceCreate = CreatorSessionNonce.create as jest.Mock;
+const mockDurableCreatorNonces = new Set<string>();
 
 function buildApp() {
   const app = express();
@@ -155,6 +163,20 @@ beforeEach(() => {
   process.env.CHALLENGE_TOKEN_SECRET = SECRET;
   process.env.PUBLIC_STELLAR_NETWORK_PASSPHRASE = NETWORK;
   creatorSessionNonceLedger.clear();
+  mockDurableCreatorNonces.clear();
+  mockCreatorSessionNonceCreate.mockImplementation(
+    async ({ _id, expiresAt }: { _id: string; expiresAt: Date }) => {
+      if (mockDurableCreatorNonces.has(_id)) {
+        const duplicate = new Error("duplicate creator-session nonce") as Error & {
+          code?: number;
+        };
+        duplicate.code = 11000;
+        throw duplicate;
+      }
+      mockDurableCreatorNonces.add(_id);
+      return { _id, expiresAt };
+    },
+  );
 });
 
 afterAll(() => {
@@ -326,7 +348,7 @@ describe("GET owned / drafts — cross-wallet matrix", () => {
     expect(mockPromptFind).not.toHaveBeenCalled();
   });
 
-  it("replay: spent owned-read session is rejected", async () => {
+  it("replay: durable nonce survives a process-local ledger reset", async () => {
     const creator = Keypair.random();
     const { sessionToken, signature } = issueSigned(
       creator,
@@ -344,12 +366,17 @@ describe("GET owned / drafts — cross-wallet matrix", () => {
       .set("X-Wallet-Signature", signature);
     expect(first.status).toBe(200);
 
+    // Simulate another process/restart: local replay memory is empty, while
+    // the shared Mongo nonce identity remains consumed.
+    creatorSessionNonceLedger.clear();
+
     const second = await request(buildApp())
       .get(`/api/prompts/buyer/${creator.publicKey()}/owned`)
       .set("Authorization", `Bearer ${sessionToken}`)
       .set("X-Wallet-Signature", signature);
     expect(second.status).toBe(409);
     expect(second.body.code).toBe("replay");
+    expect(mockCreatorSessionNonceCreate).toHaveBeenCalledTimes(2);
   });
 });
 
