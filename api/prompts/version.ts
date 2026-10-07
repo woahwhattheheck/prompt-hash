@@ -60,7 +60,7 @@ async function handler(req: any, res: any) {
       return;
     }
 
-    const session = requireCreatorVersionWriteSession(req, res, {
+    const session = await requireCreatorVersionWriteSession(req, res, {
       promptId: String(promptId),
       content: String(content),
     });
