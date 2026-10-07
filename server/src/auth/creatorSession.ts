@@ -378,7 +378,7 @@ export function verifyCreatorSessionToken(
 /**
  * Full authentication: HMAC token + wallet signature + single-use nonce.
  */
-export function authenticateCreatorSession(opts: {
+export interface CreatorSessionProofOptions {
   sessionToken: string;
   signature: string;
   expectedAction: CreatorSessionAction;
@@ -388,8 +388,17 @@ export function authenticateCreatorSession(opts: {
   secret?: string;
   now?: number;
   expectedNetwork?: string;
-  ledger?: SessionNonceLedger;
-}): VerifiedCreatorSession {
+}
+
+/**
+ * Verify the signed creator proof without deciding where replay state lives.
+ *
+ * Production callers pair this with the durable nonce ledger. The in-memory
+ * authenticateCreatorSession wrapper remains useful for isolated unit tests.
+ */
+export function verifyCreatorSessionProof(
+  opts: CreatorSessionProofOptions,
+): VerifiedCreatorSession {
   if (!opts.signature || typeof opts.signature !== "string") {
     throw new CreatorSessionError(
       "missing_credentials",
@@ -429,12 +438,6 @@ export function authenticateCreatorSession(opts: {
     );
   }
 
-  const ledger = opts.ledger ?? creatorSessionNonceLedger;
-  const now = opts.now ?? Date.now();
-  if (!ledger.consume(claims.nonce, claims.exp, now)) {
-    throw new CreatorSessionError("replay", "Session nonce already used.");
-  }
-
   return {
     address: claims.address.toLowerCase(),
     action: claims.action,
@@ -444,6 +447,22 @@ export function authenticateCreatorSession(opts: {
     contentDigest: claims.contentDigest,
     exp: claims.exp,
   };
+}
+
+export function authenticateCreatorSession(
+  opts: CreatorSessionProofOptions & {
+    ledger?: SessionNonceLedger;
+  },
+): VerifiedCreatorSession {
+  const session = verifyCreatorSessionProof(opts);
+
+  const ledger = opts.ledger ?? creatorSessionNonceLedger;
+  const now = opts.now ?? Date.now();
+  if (!ledger.consume(session.nonce, session.exp, now)) {
+    throw new CreatorSessionError("replay", "Session nonce already used.");
+  }
+
+  return session;
 }
 
 export function creatorSessionHttpStatus(err: CreatorSessionError): number {
