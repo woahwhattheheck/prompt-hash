@@ -1,4 +1,5 @@
 import express from "express";
+import { requireWalletPrincipal } from "../auth/walletPrincipalHttp";
 import {
   GetBuyerVersion,
   GetPromptVersions,
@@ -15,4 +16,4 @@ versioningRouter.get("/:promptId/history", GetPromptVersions);
 // Record a purchase at the current version index.
 versioningRouter.post("/purchase", RecordPurchase);
 // Get the version a specific buyer purchased (for unlock).
-versioningRouter.get("/buyer-version", GetBuyerVersion);
+versioningRouter.get("/buyer-version", requireWalletPrincipal, GetBuyerVersion);
