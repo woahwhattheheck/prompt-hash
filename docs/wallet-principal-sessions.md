@@ -87,6 +87,38 @@ wallet address is no longer a valid credential. The focused Jest
 wallet, authenticated reviewer/voter writes, and public vote-count access. The
 cryptographic replay/expiry tests for the shared session core remain separate.
 
+### Fulfillment: buyer sessions are not privileged service credentials
+
+A signed wallet session is required for the buyer's
+`GET /api/fulfillment/:promptId/:buyerWallet` record lookup and
+`POST /api/fulfillment/:promptId/:buyerWallet/request-refund`. The URL
+wallet is only a selector and must match the signed session's principal
+before database access (no session 401, mismatch 403). Refund eligibility
+and the existing pending/failed transitions remain enforced.
+
+Delivery state updates, privileged refund resolutions, pending-refund
+enumeration, and the scheduled auto-refund sweep require a **different,
+backend-only bearer**. Deployments must provision
+`FULFILLMENT_SERVICE_TOKEN` (at least 32 UTF-8 bytes) in the *trusted*
+unlock backend, admin/settlement backend and sweep scheduler, sending
+`Authorization: Bearer ...` to the service endpoints. The token must
+never appear in front-end code, app storage, GitHub files or logs.
+An unset/short token yields 503, missing bearer 401, wrong bearer 403.
+The check uses constant-time comparison, with `Cache-Control: no-store`.
+An ordinary signed wallet cannot update another buyer's delivery status,
+resolve a refund, enumerate the queue, or initiate a bulk sweep.
+The delivery writer only accepts pending/delivered/failed statuses;
+refund transitions go through their dedicated authorized paths.
+
+**Operational deployment dependency:** update the actual unlock service,
+admin service, and scheduler configuration before enabling these guards
+in production. This branch does not deploy or validate any remote
+service secret, wallet device, on-chain refund, or CI workflow.
+Seven targeted regression cases were authored (not executed) in
+`server/src/routes/fulfillmentAuth.test.ts`. Other privileged
+reconciliation/moderation routes remain a separate authorization
+boundary; this work does not claim they are complete.
+
 Mongo retains issuance, last-use/count and revocation timestamps plus public
 wallet/network/origin identity. It never stores the bearer token, signature,
 challenge text or private key. TTL indexes clean spent nonces and session audit
