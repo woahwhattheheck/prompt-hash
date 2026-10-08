@@ -334,8 +334,13 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   useEffect(() => {
     if (isOpen && wallet?.address) {
       setIsCheckingAccess(true);
-      PromptHashClient.checkAccess(itemId, wallet.address)
-        .then((hasAccess) => setStatus(hasAccess ? "PURCHASED_LOCKED" : "IDLE"))
+      PromptHashClient.checkAccess(
+        browserStellarConfig,
+        wallet.address,
+        itemId,
+      ).then((hasAccess) =>
+        setStatus(hasAccess ? "PURCHASED_LOCKED" : "IDLE"),
+      )
         .catch(() => setStatus("IDLE"))
         .finally(() => setIsCheckingAccess(false));
     }
