@@ -125,16 +125,25 @@ export const RecordPurchase = async (req: Request, res: Response): Promise<Respo
 
 export const GetBuyerVersion = async (req: Request, res: Response): Promise<Response> => {
   try {
-    await connectDb();
-    const { promptId, buyerWallet } = req.query;
-
-    if (!promptId || !buyerWallet) {
-      return res.status(400).json({ error: "promptId and buyerWallet query params are required." });
+    // A buyerWallet query parameter cannot authorize a private version read.
+    const buyerWallet = res.locals.walletPrincipal?.address;
+    if (typeof buyerWallet !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
     }
+    const { promptId, buyerWallet: claimedWallet } = req.query;
+    if (!promptId || typeof promptId !== "string") {
+      return res.status(400).json({ error: "promptId is required." });
+    }
+    if (claimedWallet !== undefined &&
+        (typeof claimedWallet !== "string" ||
+         claimedWallet.toLowerCase() !== buyerWallet.toLowerCase())) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
+    await connectDb();
 
     const purchase = await Purchase.findOne({
-      promptId: String(promptId),
-      buyerWallet: String(buyerWallet).toLowerCase(),
+      promptId,
+      buyerWallet: buyerWallet.toLowerCase(),
     });
 
     if (!purchase) {
