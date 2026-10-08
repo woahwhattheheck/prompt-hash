@@ -6,6 +6,7 @@ import Purchase from "../../server/src/models/Purchase";
 import User from "../../server/src/models/User";
 import { publishPromptVersion } from "../../server/src/services/promptVersioning";
 import { requireCreatorVersionWriteSession } from "../../server/src/services/creatorPrivacy";
+import { readWalletPrincipal, walletAuthenticationFailure } from "../../server/src/auth/walletPrincipalHttp";
 
 async function handler(req: any, res: any) {
   await connectDb();
@@ -13,10 +14,23 @@ async function handler(req: any, res: any) {
   // GET /api/prompts/version?promptId=&buyerWallet=
   // Returns the versioned content a buyer is entitled to.
   if (req.method === "GET") {
+    let principal;
+    try {
+      principal = await readWalletPrincipal(req);
+    } catch (error) {
+      walletAuthenticationFailure(res, error);
+      return;
+    }
     const { promptId, buyerWallet } = req.query ?? {};
 
-    if (!promptId || !buyerWallet) {
-      res.status(400).json({ error: "promptId and buyerWallet are required." });
+    if (typeof promptId !== "string" || !promptId) {
+      res.status(400).json({ error: "promptId is required." });
+      return;
+    }
+    if (buyerWallet !== undefined &&
+        (typeof buyerWallet !== "string" ||
+         buyerWallet.toLowerCase() !== principal.address.toLowerCase())) {
+      res.status(403).json({ error: "Wallet does not match authenticated session." });
       return;
     }
 
@@ -30,7 +44,7 @@ async function handler(req: any, res: any) {
 
     const purchase = await Purchase.findOne({
       promptId: String(promptId),
-      buyerWallet: String(buyerWallet).toLowerCase(),
+      buyerWallet: principal.address.toLowerCase(),
     });
 
     // If no purchase record, fall back to v1 (legacy purchase before versioning).
