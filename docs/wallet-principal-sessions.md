@@ -87,6 +87,35 @@ wallet address is no longer a valid credential. The focused Jest
 wallet, authenticated reviewer/voter writes, and public vote-count access. The
 cryptographic replay/expiry tests for the shared session core remain separate.
 
+### Webhook owners and signing-secret rotation
+
+`POST /api/webhooks`, `GET /api/webhooks` and `DELETE /api/webhooks`
+now use the same revocable wallet session as other wallet-bound routes.
+The bearer token and permitted `Origin` establish the subscription owner.
+An optional legacy `walletAddress` in the request body/query may name only
+that owner; mismatched selectors fail with 403 before accessing subscriptions.
+Old standalone `signedMessage` and `timestamp` parameters are no longer
+authorization credentials: callers must migrate to `POST /api/auth/session`.
+
+The existing privileged rotation workflow may still manage a specified
+other wallet, but only with the **server-side** `ADMIN_ROTATION_TOKEN`
+(minimum 32 UTF-8 bytes). It must not be shipped to browser clients.
+A missing, short or incorrect admin token never bypasses the signed
+wallet verifier. Admin requests must explicitly supply a target wallet.
+Webhook URL SSRF checks and event allowlisting are still enforced; GET never
+returns the subscription secret.
+
+On every registration/update the server returns a new 32-byte random
+webhook signing secret. **Updates now store this new secret before returning
+it** (previously the response promised a rotation that was not actually
+persisted). Callers must atomically replace their old secret with this
+returned value; signatures produced after rotation use the persisted new
+secret. Seven narrow route cases were added at
+`server/src/routes/webhookWalletAuth.test.ts` (auth boundary stubbed;
+not executed in this source delivery). Live webhook receivers, admin
+deployment configuration, and production session integration remain
+operational acceptance checks, not claimed here.
+
 ### Fulfillment: buyer sessions are not privileged service credentials
 
 A signed wallet session is required for the buyer's
