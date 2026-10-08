@@ -58,9 +58,9 @@ writing. `GET /api/prompts/preview/stats` now requires that same wallet session
 because it returns per-creator aggregate preview and sales context; optional
 query `walletAddress` may only name the signer. Missing credentials are
 rejected before any database query, while the existing public preview
-ingestion/token and public prompt listing endpoints remain open. The existing
-moderator report-read path is unchanged and requires a separate admin-auth
-review; a signed ordinary wallet is not an admin role.
+ingestion/token and public prompt listing endpoints remain open. The existing moderator report-read endpoint is now protected by a
+*separate* report-administration bearer; a signed ordinary wallet is never
+an administrator.
 
 Focused session-route contract cases are in
 `server/src/routes/walletReportPreviewRoutes.test.ts` (auth boundaries
@@ -115,6 +115,26 @@ secret. Seven narrow route cases were added at
 not executed in this source delivery). Live webhook receivers, admin
 deployment configuration, and production session integration remain
 operational acceptance checks, not claimed here.
+
+### Trusted moderation report reads
+
+`GET /api/prompts/reports` is **not a user wallet endpoint**. A previous
+placeholder read checked only that the `Authorization` header had a second
+word; anyone with any bearer string could enumerate report descriptions.
+The route now requires a dedicated server-only `REPORT_ADMIN_TOKEN` (minimum
+32 UTF-8 bytes), distinct from `FULFILLMENT_SERVICE_TOKEN` and ordinary
+signed wallet sessions. Unset/short configuration fails with 503, missing
+bearer with 401, and an incorrect bearer with 403 before database access.
+The common `serviceBearer` middleware compares full token bytes in constant
+time, emits static errors, and sets `Cache-Control: no-store`.
+
+Deployment must provision this token only for trusted moderation services.
+The route parses Express-relative paths correctly, supports an optional
+`promptId` filter, and does not echo raw database exceptions. The existing
+wallet-signed `POST /api/prompts/reports` remains separate: reporters may
+submit, but cannot read the moderator's report collection. Four narrow
+`walletReportPreviewRoutes.test.ts` cases exercise this separation (auth
+boundary stubbed; authored but not executed in this source delivery).
 
 ### Fulfillment: buyer sessions are not privileged service credentials
 

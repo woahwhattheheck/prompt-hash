@@ -1,6 +1,7 @@
 import express from "express";
 import asyncHandler from "express-async-handler";
 import { requireWalletPrincipal } from "../auth/walletPrincipalHttp";
+import { requireReportAdmin } from "../auth/reportAdmin";
 import {
   GetPrompts,
   GetOwnedPrompts,
@@ -133,7 +134,7 @@ promptRouter.get("/preview/stats", requireWalletPrincipal, GetPreviewStats);
 
 // Report endpoints — off-chain moderation data, does not affect access control
 promptRouter.post("/reports", requireWalletPrincipal, SubmitPromptReport);
-promptRouter.get("/reports", GetPromptReports);
+promptRouter.get("/reports", requireReportAdmin, GetPromptReports);
 
 // Re-export action constants for tests / docs consumers
 export {

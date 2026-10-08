@@ -56,6 +56,8 @@ import { promptRouter } from "./promptRoutes";
 const WALLET = "GSessionOwner";
 const OTHER = "GAnotherWallet";
 const SAMPLE = "507f1f77bcf86cd799439011";
+const ADMIN_REPORT_TOKEN = "trusted-report-admin-token-at-least-32-bytes-long";
+const originalAdminToken = process.env.REPORT_ADMIN_TOKEN;
 function app() {
   const server = express();
   server.use(express.json());
@@ -63,6 +65,10 @@ function app() {
   return server;
 }
 beforeEach(() => jest.clearAllMocks());
+afterAll(() => {
+  if (originalAdminToken === undefined) delete process.env.REPORT_ADMIN_TOKEN;
+  else process.env.REPORT_ADMIN_TOKEN = originalAdminToken;
+});
 
 describe("wallet report and preview session boundaries", () => {
   it("rejects unauthenticated private preview analytics and report writes", async () => {
@@ -111,6 +117,46 @@ describe("wallet report and preview session boundaries", () => {
       reporterAddress: WALLET.toLowerCase(),
       reason: "quality-issue",
     }));
+  });
+
+  it("denies report enumeration when admin credentials are not configured", async () => {
+    delete process.env.REPORT_ADMIN_TOKEN;
+    const result = await request(app()).get("/api/prompts/reports?promptId=" + SAMPLE)
+      .set("Authorization", "Bearer arbitrary-token");
+    expect(result.status).toBe(503);
+    expect(Report.find).not.toHaveBeenCalled();
+  });
+
+  it("rejects a signed wallet or unknown bearer as report-admin authority", async () => {
+    process.env.REPORT_ADMIN_TOKEN = ADMIN_REPORT_TOKEN;
+    const wallet = await request(app()).get("/api/prompts/reports")
+      .set("X-Test-Wallet", WALLET);
+    const forged = await request(app()).get("/api/prompts/reports")
+      .set("Authorization", "Bearer arbitrary-token");
+    expect([wallet.status, forged.status]).toEqual([401, 403]);
+    expect(Report.find).not.toHaveBeenCalled();
+  });
+
+  it("does not let the independent fulfillment token read private reports", async () => {
+    process.env.REPORT_ADMIN_TOKEN = ADMIN_REPORT_TOKEN;
+    process.env.FULFILLMENT_SERVICE_TOKEN = "not-the-report-admin-token-value-of-adequate-length";
+    const result = await request(app()).get("/api/prompts/reports")
+      .set("Authorization", `Bearer ${process.env.FULFILLMENT_SERVICE_TOKEN}`);
+    expect(result.status).toBe(403);
+    expect(Report.find).not.toHaveBeenCalled();
+    delete process.env.FULFILLMENT_SERVICE_TOKEN;
+  });
+
+  it("reads exactly the requested report set using a trusted admin token and relative URL", async () => {
+    process.env.REPORT_ADMIN_TOKEN = ADMIN_REPORT_TOKEN;
+    (Report.find as jest.Mock).mockReturnValue({
+      sort: jest.fn().mockResolvedValue([{ promptId: SAMPLE, reason: "quality-issue" }]),
+    });
+    const result = await request(app()).get("/api/prompts/reports?promptId=" + SAMPLE)
+      .set("Authorization", `Bearer ${ADMIN_REPORT_TOKEN}`);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual([{ promptId: SAMPLE, reason: "quality-issue" }]);
+    expect(Report.find).toHaveBeenCalledWith({ promptId: SAMPLE });
   });
 
   it("preserves the anonymous public preview-token lookup", async () => {

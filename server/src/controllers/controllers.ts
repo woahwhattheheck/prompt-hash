@@ -501,17 +501,11 @@ export const GetPromptReports = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
+    // Trusted report-admin bearer is verified by route middleware before
+    // any DB read. Ordinary signed wallets are not moderator credentials.
     await connectDb();
-
-    // Check admin authentication (placeholder)
-    const adminToken = req.headers.authorization?.split(" ")[1];
-    if (!adminToken) {
-      return res.status(401).json({
-        error: "Unauthorized: Admin token required",
-      });
-    }
-
-    const { searchParams } = new URL(req.url);
+    // Express supplies a relative req.url for mounted routes.
+    const { searchParams } = new URL(req.url, "http://localhost");
     const promptId = searchParams.get("promptId");
 
     const query: any = {};
@@ -523,11 +517,9 @@ export const GetPromptReports = async (
       .sort({ createdAt: -1 });
 
     return res.json(reports);
-  } catch (err) {
-    console.error("Get reports error:", err);
-    return res.status(500).json({
-      error: (err as Error).message || "Failed to fetch reports",
-    });
+  } catch {
+    // Errors may include sensitive moderation records; no raw body/log echo.
+    return res.status(500).json({ error: "Failed to fetch reports." });
   }
 };
 
