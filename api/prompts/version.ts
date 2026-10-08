@@ -47,8 +47,14 @@ async function handler(req: any, res: any) {
       buyerWallet: principal.address.toLowerCase(),
     });
 
-    // If no purchase record, fall back to v1 (legacy purchase before versioning).
-    const versionIndex = purchase?.versionIndex ?? 1;
+    // A verified wallet session proves identity, not entitlement. Do not serve
+    // private version content to an authenticated wallet without a purchase.
+    if (!purchase) {
+      res.status(404).json({ error: "No purchase record found." });
+      return;
+    }
+    // Legacy purchases without a recorded version index refer to v1.
+    const versionIndex = purchase.versionIndex ?? 1;
 
     const version = await PromptVersion.findOne({
       promptId: String(promptId),
