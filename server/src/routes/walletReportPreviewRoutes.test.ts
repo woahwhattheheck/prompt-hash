@@ -22,7 +22,7 @@ jest.mock("../models/Report", () => ({
 jest.mock("../models/Purchase", () => ({ __esModule: true, default: { findOne: jest.fn() } }));
 jest.mock("../models/AuditLog", () => ({ AuditLog: { create: jest.fn() } }));
 jest.mock("../models/PreviewEvent", () => ({
-  __esModule: true, default: { aggregate: jest.fn() },
+  __esModule: true, PreviewEvent: { aggregate: jest.fn() },
 }));
 jest.mock("../services/cacheService", () => ({
   cacheGetOrLoad: jest.fn(),
