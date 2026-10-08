@@ -24,6 +24,18 @@ are distinct from `FULFILLMENT_SERVICE_TOKEN`,
 `REPORT_ADMIN_TOKEN` and end-user wallet sessions. Rotate them through normal
 server secret management. The middleware sets `Cache-Control: no-store`.
 
+**Report signatures require one more distinct server-side secret**:
+`RECONCILIATION_SECRET` must be provisioned with at least 32 UTF-8 bytes.
+There is no embedded signing key, empty-string fallback, or weak sample key in
+production. If a deployment omits this value, generating the reconciliation
+report fails closed instead of producing a forgeable HMAC signature. The key is
+resolved at signing time, so deployment-level key rotation takes effect without
+rebuilding the server. Operators must retain authorized key-rotation evidence
+for older signatures rather than treating them as newly signed under a new key.
+Never send the signing secret to the browser or reuse either bearer token as
+an HMAC key. Focused key handling cases:
+`server/src/services/reconciliationSigning.test.ts`.
+
 Reconciliation `POST /run` can write a report even in dry-run mode and may
 perform operational scans. Treat it as a backend-only action. The separate
 approval credential is needed for repair, and approval does not guarantee
