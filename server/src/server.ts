@@ -13,6 +13,7 @@ import searchRouter from "./routes/searchRoutes";
 import { fulfillmentRouter } from "./routes/fulfillmentRoutes";
 import { reconciliationRouter } from "./routes/reconciliationRoutes";
 import { reviewRouter } from "./routes/reviewRoutes";
+import { walletSessionRouter } from "./routes/walletSessionRoutes";
 import { computeReadiness } from "./services/healthService";
 import {
   globalLimiter,
@@ -72,6 +73,7 @@ app.use("/api/improve-proxy", defaultJsonLimit, strictLimiter, proxyrouter);
 app.use("/api/prompts", promptContentJsonLimit, promptRouter);
 
 app.use("/api/user", defaultJsonLimit, authLimiter, userRouter);
+app.use("/api/auth/session", defaultJsonLimit, authLimiter, walletSessionRouter);
 
 app.use("/api/chat", defaultJsonLimit, chatLimiter, chatRouter);
 app.use("/api/webhooks", defaultJsonLimit, strictLimiter, webhookRouter);
@@ -139,3 +141,4 @@ app.listen(port, () => {
   // Backups are scheduled only by backup.crontab. runBackup itself also takes a
   // MongoDB lease, so overlapping cron/container invocations cannot run twice.
 });
+
