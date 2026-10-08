@@ -191,6 +191,13 @@ export async function executeRepair(reportId: string, approvedBy: string) {
     throw new Error(`Reconciliation report ${reportId} not found`);
   }
 
+  // Generating a dry-run report never authorizes any settlement mutation.
+  // Require an explicit non-dry-run report as well as the route's privileged
+  // approval role before touching fulfillment or webhook state.
+  if (report.isDryRun !== false) {
+    throw new Error("Dry-run reconciliation reports cannot be repaired.");
+  }
+
   if (report.approvedBy && report.approvedBy !== approvedBy) {
     throw new Error(`Report was already approved by ${report.approvedBy}`);
   }
@@ -203,27 +210,11 @@ export async function executeRepair(reportId: string, approvedBy: string) {
 
     try {
       if (item.type === "missing_fulfillment") {
-        await FulfillmentRecord.findOneAndUpdate(
-          { promptId: item.promptId, buyerWallet: item.buyerWallet.toLowerCase() },
-          {
-            $set: {
-              status: "delivered",
-              txHash: item.txHash || "",
-              deliveryAttemptedAt: new Date(),
-            },
-            $push: {
-              auditLog: {
-                status: "delivered",
-                note: `Repaired via reconciliation report ${reportId} by ${approvedBy}`,
-                at: new Date(),
-              },
-            },
-          },
-          { upsert: true }
-        );
-        item.repairStatus = "completed";
-        item.repairedAt = new Date();
-        repairedCount++;
+        // A missing delivery record is not evidence that delivery completed.
+        // Only the actual unlock/delivery service may attest that transition;
+        // never fabricate a "delivered" state from a purchase ledger row.
+        item.repairStatus = "skipped";
+        item.repairError = "Delivery needs independent verification before status can change.";
       } else if (item.type === "webhook_undelivered") {
         await dispatchEvent(item.buyerWallet, "PromptPurchased", {
           promptId: item.promptId,
