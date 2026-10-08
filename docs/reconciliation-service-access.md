@@ -39,8 +39,13 @@ an HMAC key. Focused key handling cases:
 Reconciliation `POST /run` can write a report even in dry-run mode and may
 perform operational scans. Treat it as a backend-only action. The separate
 approval credential is needed for repair, and approval does not guarantee
-ledger settlement; verify actual on-chain outcome independently. The
-service's existing report-status and audit-log behavior is otherwise unchanged.
+ledger settlement; verify actual on-chain outcome independently. A dry-run report is never eligible for repair, even with the approver
+credential. For an authorized repair, create an explicitly non-dry-run report
+under the service role first. A missing fulfillment record does not prove the
+purchase was delivered; the reconciliation repair marks that case skipped for
+independent delivery verification rather than inventing a delivered receipt.
+An appropriate webhook-redelivery repair remains supported. A report can stay
+partially repaired while missing delivery proof awaits the real unlock service.
 
 Focused offline route cases: `server/src/routes/reconciliationAuth.test.ts`.
 No live payments, actual provider credentials, or admin browser sessions are
