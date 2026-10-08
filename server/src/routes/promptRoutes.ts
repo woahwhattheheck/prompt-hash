@@ -1,5 +1,6 @@
 import express from "express";
 import asyncHandler from "express-async-handler";
+import { requireWalletPrincipal } from "../auth/walletPrincipalHttp";
 import {
   GetPrompts,
   GetOwnedPrompts,
@@ -122,7 +123,7 @@ promptRouter.post(
 );
 
 promptRouter.get("/buyer/:walletAddress/owned", GetOwnedPrompts);
-promptRouter.get("/buyer/:walletAddress/saved", GetSavedPrompts);
+promptRouter.get("/buyer/:walletAddress/saved", requireWalletPrincipal, GetSavedPrompts);
 promptRouter.get("/creator/:walletAddress/drafts", GetDraftPrompts);
 
 // Preview analytics (#257)
