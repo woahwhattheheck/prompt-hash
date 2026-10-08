@@ -14,6 +14,8 @@ export const versioningRouter = express.Router();
 versioningRouter.post("/update", PostPromptUpdate);
 // List version history for a prompt (metadata only, no content).
 versioningRouter.get("/:promptId/history", GetPromptVersions);
-// Index only purchase state already verified by the trusted backend.\n// A browser wallet session cannot mint this entitlement record.\nversioningRouter.post("/purchase", requireFulfillmentService, RecordPurchase);
+// Index only purchase state already verified by the trusted backend.
+// A browser wallet session cannot mint this entitlement record.
+versioningRouter.post("/purchase", requireFulfillmentService, RecordPurchase);
 // Get the version a specific buyer purchased (for unlock).
 versioningRouter.get("/buyer-version", requireWalletPrincipal, GetBuyerVersion);
