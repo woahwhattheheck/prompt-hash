@@ -49,9 +49,26 @@ only when a route needs to reject an inconsistent request. Signing keys retain
 Stellar's case. Existing database lookups may normalize addresses according to
 their current storage contract after authentication.
 
+### Authenticated review and governance writes
 
-### Authenticated review and governance writes\n
-`POST /g/api/reviews/submit`, `POST /api/governance/vote/:promptId` and\n`DELETE /api/governance/vote/:promptId` now require the session bearer and its\nmatching permitted `Origin`. They derive the reviewer/voter wallet from the\nverified principal. Legacy `userAddress` and `voterWallet` body fields are\noptional compatibility selectors only: if supplied, they must match the signed\nwallet or the mutation is rejected with 403. No session is denied with 401;\ninvalid session/configuration is rejected by the common verifier before any\nreview or vote query. Existing purchase eligibility, duplicate-vote, and\nreview rating checks are retained. Public `GET /api/reviews/list`,\n`GET /api/governance/votes/:promptId`, and `GET /api/governance/top` stay open.\n\nClients issuing either write must obtain a wallet session first; a body-only\nwallet address is no longer a valid credential. The focused Jest\n`server/src/routes/walletAuthorizedWrites.test.ts` covers no-session, forged\nwallet, authenticated reviewer/voter writes, and public vote-count access. The\ncryptographic replay/expiry tests for the shared session core remain separate.\n\nMongo retains issuance, last-use/count and revocation timestamps plus public
+`POST /api/reviews/submit`, `POST /api/governance/vote/:promptId` and
+`DELETE /api/governance/vote/:promptId` now require the session bearer and its
+matching permitted `Origin`. They derive the reviewer/voter wallet from the
+verified principal. Legacy `userAddress` and `voterWallet` body fields are
+optional compatibility selectors only: if supplied, they must match the signed
+wallet or the mutation is rejected with 403. No session is denied with 401;
+invalid session/configuration is rejected by the common verifier before any
+review or vote query. Existing purchase eligibility, duplicate-vote, and
+review rating checks are retained. Public `GET /api/reviews/list`,
+`GET /api/governance/votes/:promptId`, and `GET /api/governance/top` stay open.
+
+Clients issuing either write must obtain a wallet session first; a body-only
+wallet address is no longer a valid credential. The focused Jest
+`server/src/routes/walletAuthorizedWrites.test.ts` covers no-session, forged
+wallet, authenticated reviewer/voter writes, and public vote-count access. The
+cryptographic replay/expiry tests for the shared session core remain separate.
+
+Mongo retains issuance, last-use/count and revocation timestamps plus public
 wallet/network/origin identity. It never stores the bearer token, signature,
 challenge text or private key. TTL indexes clean spent nonces and session audit
 records (sessions retained for 30 days after expiry); cryptographic expiry and
