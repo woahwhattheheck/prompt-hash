@@ -1,9 +1,10 @@
 # Shared wallet principal sessions (#144, core and adapters)
 
 This contribution provides the common session lifecycle and verified principal
-adapters. It stacks on the current creator-privacy work in #266. Existing creator,
-governance and purchase authorization are unchanged. Remaining wallet-bound route
-families must be migrated before #144 can be considered complete; mounting these
+adapters. It stacks on the current creator-privacy work in #266. Existing creator
+and purchase authorization remain unchanged; governance vote writes and review
+submissions now consume the authenticated wallet principal. Other wallet-bound
+routes still require separate migration before #144 is complete; mounting these
 session endpoints alone does not authenticate the rest of the API.
 
 Both Express and serverless expose `POST /api/auth/session` with three actions:
@@ -48,7 +49,9 @@ only when a route needs to reject an inconsistent request. Signing keys retain
 Stellar's case. Existing database lookups may normalize addresses according to
 their current storage contract after authentication.
 
-Mongo retains issuance, last-use/count and revocation timestamps plus public
+
+### Authenticated review and governance writes\n
+`POST /g/api/reviews/submit`, `POST /api/governance/vote/:promptId` and\n`DELETE /api/governance/vote/:promptId` now require the session bearer and its\nmatching permitted `Origin`. They derive the reviewer/voter wallet from the\nverified principal. Legacy `userAddress` and `voterWallet` body fields are\noptional compatibility selectors only: if supplied, they must match the signed\nwallet or the mutation is rejected with 403. No session is denied with 401;\ninvalid session/configuration is rejected by the common verifier before any\nreview or vote query. Existing purchase eligibility, duplicate-vote, and\nreview rating checks are retained. Public `GET /api/reviews/list`,\n`GET /api/governance/votes/:promptId`, and `GET /api/governance/top` stay open.\n\nClients issuing either write must obtain a wallet session first; a body-only\nwallet address is no longer a valid credential. The focused Jest\n`server/src/routes/walletAuthorizedWrites.test.ts` covers no-session, forged\nwallet, authenticated reviewer/voter writes, and public vote-count access. The\ncryptographic replay/expiry tests for the shared session core remain separate.\n\nMongo retains issuance, last-use/count and revocation timestamps plus public
 wallet/network/origin identity. It never stores the bearer token, signature,
 challenge text or private key. TTL indexes clean spent nonces and session audit
 records (sessions retained for 30 days after expiry); cryptographic expiry and
