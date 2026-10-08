@@ -1,4 +1,5 @@
-import express from "express";
+import express, { Request, Response } from "express";
+import { requireWalletPrincipal } from "../auth/walletPrincipalHttp";
 import asyncHandler from "express-async-handler";
 import Vote from "../models/Vote";
 import Purchase from "../models/Purchase";
@@ -14,23 +15,37 @@ import Purchase from "../models/Purchase";
 
 export const governanceRouter = express.Router();
 
+/** A request body is never proof of a wallet's identity. */
+function authenticatedVoterWallet(req: Request, res: Response): string | null {
+  const principalAddress = res.locals.walletPrincipal?.address;
+  if (typeof principalAddress !== "string") {
+    res.status(401).json({ error: "Wallet session required." });
+    return null;
+  }
+
+  const claimedWallet = req.body?.voterWallet;
+  if (claimedWallet !== undefined &&
+      (typeof claimedWallet !== "string" || claimedWallet.toLowerCase() !== principalAddress.toLowerCase())) {
+    res.status(403).json({ error: "Wallet does not match authenticated session." });
+    return null;
+  }
+  return principalAddress.toLowerCase();
+}
+
 // ── Cast upvote ───────────────────────────────────────────────────────────────
 
 governanceRouter.post(
   "/vote/:promptId",
+  requireWalletPrincipal,
   asyncHandler(async (req, res) => {
     const { promptId } = req.params;
-    const { voterWallet } = req.body as { voterWallet?: string };
-
-    if (!voterWallet) {
-      res.status(400).json({ error: "voterWallet is required" });
-      return;
-    }
+    const voterWallet = authenticatedVoterWallet(req, res);
+    if (!voterWallet) return;
 
     // Eligibility: voter must have purchased this prompt
     const hasPurchased = await Purchase.exists({
       promptId,
-      buyerWallet: voterWallet.toLowerCase(),
+      buyerWallet: voterWallet,
     });
 
     if (!hasPurchased) {
@@ -39,7 +54,7 @@ governanceRouter.post(
     }
 
     try {
-      await Vote.create({ promptId, voterWallet: voterWallet.toLowerCase() });
+      await Vote.create({ promptId, voterWallet });
       const count = await Vote.countDocuments({ promptId });
       res.status(201).json({ success: true, upvotes: count });
     } catch (err: unknown) {
@@ -57,18 +72,15 @@ governanceRouter.post(
 
 governanceRouter.delete(
   "/vote/:promptId",
+  requireWalletPrincipal,
   asyncHandler(async (req, res) => {
     const { promptId } = req.params;
-    const { voterWallet } = req.body as { voterWallet?: string };
-
-    if (!voterWallet) {
-      res.status(400).json({ error: "voterWallet is required" });
-      return;
-    }
+    const voterWallet = authenticatedVoterWallet(req, res);
+    if (!voterWallet) return;
 
     const deleted = await Vote.findOneAndDelete({
       promptId,
-      voterWallet: voterWallet.toLowerCase(),
+      voterWallet,
     });
 
     if (!deleted) {
