@@ -3,39 +3,42 @@ import { randomBytes } from "crypto";
 import connectDb from "../db/connectDb";
 import WebhookSubscription from "../models/WebhookSubscription";
 import { ALLOWED_EVENTS } from "../services/webhookDispatcher";
-import { verifyChallengeSignature } from "../utils/challengeSignature";
+import { validateWebhookUrl } from "../services/ssrfProtection";
 
-const ADMIN_TOKEN = process.env.ADMIN_ROTATION_TOKEN || "";
+/**
+ * The authenticated principal is selected by the route middleware, never by
+ * an unsigned query/body wallet string. Admin rotation is a separate bearer
+ * capability and must explicitly name the target wallet.
+ */
+function authorizedOwner(req: Request, res: Response, walletSelector: unknown): string | null {
+  if (res.locals.webhookAdmin === true) {
+    if (typeof walletSelector !== "string" || !walletSelector.trim()) {
+      res.status(400).json({ error: "walletAddress is required for admin operations." });
+      return null;
+    }
+    return walletSelector.toLowerCase();
+  }
 
-function isAdminRequest(req: Request) {
-  const auth = String(req.headers['authorization'] || req.headers['Authorization'] || "");
-  if (!auth.startsWith("Bearer ")) return false;
-  const token = auth.slice("Bearer ".length).trim();
-  return token && ADMIN_TOKEN && token === ADMIN_TOKEN;
-}
-
-function validateSignedOwner(req: Request, address?: string): string | null {
-  const addr = String(address ?? (req.body as any)?.walletAddress ?? (req.query as any)?.walletAddress ?? "").toLowerCase();
-  const signedMessage = (req.body as any)?.signedMessage ?? (req.query as any)?.signedMessage;
-  const timestamp = (req.body as any)?.timestamp ?? (req.query as any)?.timestamp;
-  if (!addr || !signedMessage || !timestamp) return null;
-  const expected = `prompt-hash webhooks:${addr}:${timestamp}`;
-  try {
-    if (verifyChallengeSignature(addr, expected, String(signedMessage))) return addr;
-  } catch {
+  const principal = res.locals.walletPrincipal?.address;
+  if (typeof principal !== "string") {
+    res.status(401).json({ error: "Wallet session required." });
     return null;
   }
-  return null;
+  // Legacy callers may send a selector, but cannot use it as identity.
+  if (walletSelector !== undefined &&
+      (typeof walletSelector !== "string" || walletSelector.toLowerCase() !== principal.toLowerCase())) {
+    res.status(403).json({ error: "Wallet does not match authenticated session." });
+    return null;
+  }
+  return principal.toLowerCase();
 }
-
-import { validateWebhookUrl } from "../services/ssrfProtection";
 
 export const RegisterWebhook = async (req: Request, res: Response): Promise<Response> => {
   try {
-    await connectDb();
-    const { url, events } = req.body;
-
-    if (!url) {
+    const owner = authorizedOwner(req, res, req.body?.walletAddress);
+    if (!owner) return res;
+    const { url, events } = req.body ?? {};
+    if (typeof url !== "string" || !url) {
       return res.status(400).json({ error: "url is required." });
     }
 
@@ -43,77 +46,56 @@ export const RegisterWebhook = async (req: Request, res: Response): Promise<Resp
     if (!ssrfCheck.valid) {
       return res.status(400).json({ error: "Invalid or blocked webhook destination URL." });
     }
-
-    // Determine owner: admin may provide walletAddress, otherwise validate signed owner
-    let owner: string | null = null;
-    if (isAdminRequest(req) && (req.body as any)?.walletAddress) {
-      owner = String((req.body as any).walletAddress).toLowerCase();
-    } else {
-      owner = validateSignedOwner(req, (req.body as any)?.walletAddress);
-    }
-
-    if (!owner) return res.status(401).json({ error: "Unauthorized: signed ownership proof required." });
-
+    await connectDb();
     const secret = randomBytes(32).toString("hex");
-    const resolvedEvents = Array.isArray(events) ? events.filter((e: string) => ALLOWED_EVENTS.includes(e as any)) : ["PromptPurchased"];
+    const resolvedEvents = Array.isArray(events)
+      ? events.filter((e: unknown) => typeof e === "string" && ALLOWED_EVENTS.includes(e as any))
+      : ["PromptPurchased"];
 
     const existing = await WebhookSubscription.findOne({ walletAddress: owner });
-
     if (existing) {
       existing.url = url;
       existing.events = resolvedEvents;
       existing.active = true;
       existing.failureCount = 0;
+      // A previously returned rotation secret was never persisted; webhooks
+      // would then be signed with the OLD secret while clients stored the new.
+      existing.secret = secret;
       await existing.save();
       return res.status(200).json({ message: "Webhook updated.", id: existing._id, secret });
     }
 
-    const sub = new WebhookSubscription({ walletAddress: owner, url, secret, events: resolvedEvents });
+    const sub = new WebhookSubscription({
+      walletAddress: owner, url, secret, events: resolvedEvents,
+    });
     await sub.save();
-
     return res.status(201).json({ message: "Webhook registered.", id: sub._id, secret });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return res.status(500).json({ error: "Webhook registration failed." });
   }
 };
 
 export const GetWebhook = async (req: Request, res: Response): Promise<Response> => {
   try {
+    const owner = authorizedOwner(req, res, req.query.walletAddress);
+    if (!owner) return res;
     await connectDb();
-    // Admin may query any wallet when authorized
-    if (isAdminRequest(req)) {
-      const { walletAddress } = req.query;
-      if (!walletAddress) return res.status(400).json({ error: "walletAddress query param is required." });
-      const sub = await WebhookSubscription.findOne({ walletAddress: String(walletAddress).toLowerCase() }).select("-secret");
-      if (!sub) return res.status(404).json({ error: "No webhook registered for this wallet." });
-      return res.json(sub);
-    }
-
-    const { walletAddress } = req.query;
-    const owner = validateSignedOwner(req, walletAddress as string | undefined);
-    if (!owner) return res.status(401).json({ error: "Unauthorized: signed ownership proof required." });
     const sub = await WebhookSubscription.findOne({ walletAddress: owner }).select("-secret");
     if (!sub) return res.status(404).json({ error: "No webhook registered for this wallet." });
     return res.json(sub);
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return res.status(500).json({ error: "Failed to fetch webhook." });
   }
 };
 
 export const DeleteWebhook = async (req: Request, res: Response): Promise<Response> => {
   try {
+    const owner = authorizedOwner(req, res, req.body?.walletAddress);
+    if (!owner) return res;
     await connectDb();
-    // Admin may delete any subscription when authorized
-    if (isAdminRequest(req) && (req.body as any)?.walletAddress) {
-      await WebhookSubscription.deleteOne({ walletAddress: String((req.body as any).walletAddress).toLowerCase() });
-      return res.status(200).json({ message: "Webhook removed." });
-    }
-
-    const owner = validateSignedOwner(req, (req.body as any)?.walletAddress);
-    if (!owner) return res.status(401).json({ error: "Unauthorized: signed ownership proof required." });
     await WebhookSubscription.deleteOne({ walletAddress: owner });
     return res.status(200).json({ message: "Webhook removed." });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  } catch {
+    return res.status(500).json({ error: "Failed to delete webhook." });
   }
 };
