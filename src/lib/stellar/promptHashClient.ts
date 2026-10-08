@@ -78,14 +78,48 @@ export class PromptHashClient {
    * Checks if the user already has access to the prompt.
    */
   static async checkAccess(
-    _config: PromptHashConfig | string,
-    _address: string,
-    _itemId?: string | bigint,
+    config: PromptHashConfig | string,
+    address: string,
+    itemId?: string | bigint,
   ): Promise<boolean> {
-    warnMockUse();
-    return new Promise((resolve) => {
-      setTimeout(() => resolve(false), 1000);
-    });
+    // The legacy two-argument form was a deterministic demo stub. Keep it
+    // fail-closed so production reloads can never fabricate ownership.
+    if (typeof config === "string" || itemId === undefined) {
+      if (isDemoMarketplaceEnabled()) warnMockUse();
+      return false;
+    }
+
+    let promptId: bigint;
+    try {
+      promptId = typeof itemId === "bigint" ? itemId : BigInt(itemId);
+    } catch {
+      return false;
+    }
+
+    if (
+      !address ||
+      promptId < 0n ||
+      !config.rpcUrl ||
+      !config.networkPassphrase ||
+      !config.promptHashContractId
+    ) {
+      return false;
+    }
+
+    try {
+      const accessRead = await simulateContractCall(
+        config,
+        address,
+        config.promptHashContractId,
+        "has_access",
+        [scValArg(address, "address"), scValArg(promptId, "u64")],
+      );
+      return readSimulationResult(accessRead.simulation) === true;
+    } catch {
+      // Access checks are advisory UI state. Network/configuration failures
+      // must not unlock content or claim ownership.
+      return false;
+    }
   }
 
   static async getPrompt(
