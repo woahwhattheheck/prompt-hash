@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import { requireWalletPrincipal } from "../auth/walletPrincipalHttp";
 import connectDb from "../db/connectDb";
 import Review from "../models/Review";
 import Purchase from "../models/Purchase";
@@ -8,19 +9,30 @@ import { CACHE_KEYS } from "../services/cacheService";
 export const reviewRouter = express.Router();
 
 // POST /api/reviews/submit
-reviewRouter.post("/submit", async (req: Request, res: Response) => {
+reviewRouter.post("/submit", requireWalletPrincipal, async (req: Request, res: Response) => {
   try {
     await connectDb();
 
-    const { promptId, userAddress, rating, text } = req.body as {
+    const { promptId, userAddress, rating, text } = (req.body ?? {}) as {
       promptId?: string;
       userAddress?: string;
       rating?: number;
       text?: string;
     };
 
-    if (!promptId || !userAddress || !rating) {
-      return res.status(400).json({ error: "promptId, userAddress and rating are required" });
+    // The signed session, not an arbitrary body field, determines the reviewer.
+    const principalAddress = res.locals.walletPrincipal?.address;
+    if (typeof principalAddress !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
+    }
+    if (userAddress !== undefined &&
+        (typeof userAddress !== "string" || userAddress.toLowerCase() !== principalAddress.toLowerCase())) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
+    const reviewerAddress = principalAddress.toLowerCase();
+
+    if (!promptId || !rating) {
+      return res.status(400).json({ error: "promptId and rating are required" });
     }
 
     if (rating < 1 || rating > 5 || !Number.isInteger(rating)) {
@@ -30,7 +42,7 @@ reviewRouter.post("/submit", async (req: Request, res: Response) => {
     // Verify ownership — buyer must have a purchase record for this prompt
     const purchase = await Purchase.findOne({
       promptId,
-      buyerWallet: userAddress.toLowerCase(),
+      buyerWallet: reviewerAddress,
     });
 
     if (!purchase) {
@@ -40,7 +52,7 @@ reviewRouter.post("/submit", async (req: Request, res: Response) => {
     }
 
     const review = await Review.findOneAndUpdate(
-      { promptId, userAddress: userAddress.toLowerCase() },
+      { promptId, userAddress: reviewerAddress },
       { rating, text: text ?? "", verified: true },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
