@@ -270,15 +270,19 @@ export const CreateUser = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
-    await connectDb();
-
-    const { walletAddress, username } = await req.body;
-
-    if (!walletAddress) {
-      return res.status(400).json({
-        error: "Wallet address is required",
-      });
+    // The wallet session is the identity, not a caller-supplied walletAddress.
+    const walletAddress = res.locals.walletPrincipal?.address;
+    if (typeof walletAddress !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
     }
+    const { walletAddress: claimedWallet, username } = req.body ?? {};
+    if (claimedWallet !== undefined &&
+        (typeof claimedWallet !== "string" ||
+         claimedWallet.toLowerCase() !== walletAddress.toLowerCase())) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
+
+    await connectDb();
 
     // Check if user already exists
     const existingUser = await User.findOne({
@@ -862,8 +866,14 @@ export const GetPayoutSettings = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
+    const walletAddress = res.locals.walletPrincipal?.address;
+    if (typeof walletAddress !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
+    }
+    if (req.params.walletAddress?.toLowerCase() !== walletAddress.toLowerCase()) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
     await connectDb();
-    const { walletAddress } = req.params;
     const user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -879,8 +889,14 @@ export const UpdatePayoutSettings = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
+    const walletAddress = res.locals.walletPrincipal?.address;
+    if (typeof walletAddress !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
+    }
+    if (req.params.walletAddress?.toLowerCase() !== walletAddress.toLowerCase()) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
     await connectDb();
-    const { walletAddress } = req.params;
     const { payoutAddress, signature, signedMessage } = req.body;
 
     // Validate StrKey
