@@ -655,15 +655,23 @@ export const GetSavedPrompts = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
-    await connectDb();
     const { walletAddress } = req.params;
-
     if (!walletAddress) {
       return res.status(400).json({ error: "walletAddress is required." });
     }
 
+    // The URL is only a selector; the signed wallet session owns this read.
+    const principal = res.locals.walletPrincipal?.address;
+    if (typeof principal !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
+    }
+    if (walletAddress.toLowerCase() !== principal.toLowerCase()) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
+
+    await connectDb();
     const user = await User.findOne({
-      walletAddress: walletAddress.toLowerCase(),
+      walletAddress: principal.toLowerCase(),
     });
     if (!user) {
       return res.status(404).json({ error: "User not found." });
