@@ -2,8 +2,26 @@ import { Router, Request, Response } from "express";
 import FulfillmentRecord, {
   FulfillmentStatus,
 } from "../models/FulfillmentRecord";
+import { requireWalletPrincipal } from "../auth/walletPrincipalHttp";
+import { requireFulfillmentService } from "../auth/fulfillmentService";
 
 export const fulfillmentRouter = Router();
+
+/** Match a URL buyer selector to a signed wallet principal before any query. */
+function authenticatedBuyer(req: Request, res: Response): string | null {
+  res.setHeader("Cache-Control", "no-store");
+  const principal = res.locals.walletPrincipal?.address;
+  if (typeof principal !== "string") {
+    res.status(401).json({ error: "Wallet session required." });
+    return null;
+  }
+  const selector = req.params.buyerWallet;
+  if (typeof selector !== "string" || selector.toLowerCase() !== principal.toLowerCase()) {
+    res.status(403).json({ error: "Wallet does not match authenticated session." });
+    return null;
+  }
+  return principal.toLowerCase();
+}
 
 /**
  * GET /api/fulfillment/:promptId/:buyerWallet
@@ -11,8 +29,11 @@ export const fulfillmentRouter = Router();
  */
 fulfillmentRouter.get(
   "/:promptId/:buyerWallet",
+  requireWalletPrincipal,
   async (req: Request, res: Response) => {
-    const { promptId, buyerWallet } = req.params;
+    const { promptId } = req.params;
+    const buyerWallet = authenticatedBuyer(req, res);
+    if (!buyerWallet) return;
     const record = await FulfillmentRecord.findOne({
       promptId,
       buyerWallet: buyerWallet.toLowerCase(),
@@ -32,7 +53,7 @@ fulfillmentRouter.get(
  *
  * Body: { promptId, buyerWallet, txHash?, status, failureReason? }
  */
-fulfillmentRouter.post("/", async (req: Request, res: Response) => {
+fulfillmentRouter.post("/", requireFulfillmentService, async (req: Request, res: Response) => {
   const {
     promptId,
     buyerWallet,
@@ -45,10 +66,15 @@ fulfillmentRouter.post("/", async (req: Request, res: Response) => {
     txHash?: string;
     status: FulfillmentStatus;
     failureReason?: string;
-  } = req.body;
+  } = req.body ?? {};
 
-  if (!promptId || !buyerWallet || !status) {
-    res.status(400).json({ error: "promptId, buyerWallet and status are required" });
+  // Dispute and refund transitions belong to their separate privileged paths.
+  if (typeof promptId !== "string" || !promptId ||
+      typeof buyerWallet !== "string" || !buyerWallet ||
+      !["pending", "delivered", "failed"].includes(status) ||
+      (txHash !== undefined && typeof txHash !== "string") ||
+      (failureReason !== undefined && typeof failureReason !== "string")) {
+    res.status(400).json({ error: "Invalid fulfillment delivery input." });
     return;
   }
 
@@ -79,15 +105,19 @@ fulfillmentRouter.post("/", async (req: Request, res: Response) => {
  */
 fulfillmentRouter.post(
   "/:promptId/:buyerWallet/request-refund",
+  requireWalletPrincipal,
   async (req: Request, res: Response) => {
-    const { promptId, buyerWallet } = req.params;
-    const { reason, disputeTxHash } = req.body as {
+    const { promptId } = req.params;
+    const buyerWallet = authenticatedBuyer(req, res);
+    if (!buyerWallet) return;
+    const { reason, disputeTxHash } = (req.body ?? {}) as {
       reason: string;
       disputeTxHash?: string;
     };
 
-    if (!reason) {
-      res.status(400).json({ error: "reason is required" });
+    if (typeof reason !== "string" || !reason.trim() || reason.length > 4000 ||
+        (disputeTxHash !== undefined && typeof disputeTxHash !== "string")) {
+      res.status(400).json({ error: "A valid refund reason is required." });
       return;
     }
 
@@ -131,12 +161,18 @@ fulfillmentRouter.post(
  */
 fulfillmentRouter.post(
   "/:promptId/:buyerWallet/resolve",
+  requireFulfillmentService,
   async (req: Request, res: Response) => {
     const { promptId, buyerWallet } = req.params;
-    const { refund, resolutionTxHash } = req.body as {
+    const { refund, resolutionTxHash } = (req.body ?? {}) as {
       refund: boolean;
       resolutionTxHash?: string;
     };
+    if (typeof refund !== "boolean" ||
+        (resolutionTxHash !== undefined && typeof resolutionTxHash !== "string")) {
+      res.status(400).json({ error: "Invalid refund resolution." });
+      return;
+    }
 
     const record = await FulfillmentRecord.findOne({
       promptId,
@@ -175,7 +211,7 @@ fulfillmentRouter.post(
  * Returns all records with status=refund_requested.
  * Intended for admin dashboards.
  */
-fulfillmentRouter.get("/pending-refunds", async (_req, res: Response) => {
+fulfillmentRouter.get("/pending-refunds", requireFulfillmentService, async (_req, res: Response) => {
   const records = await FulfillmentRecord.find({
     status: "refund_requested",
   }).sort({ updatedAt: -1 });
@@ -188,11 +224,15 @@ fulfillmentRouter.get("/pending-refunds", async (_req, res: Response) => {
  * timeout window as `refund_requested`.  Intended to be called by a
  * cron job or a scheduled task (#335).
  */
-fulfillmentRouter.post("/auto-refund-sweep", async (_req, res: Response) => {
+fulfillmentRouter.post("/auto-refund-sweep", requireFulfillmentService, async (_req, res: Response) => {
   const timeoutMs = parseInt(
     process.env.FULFILLMENT_TIMEOUT_MS ?? "600000",
     10,
   );
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    res.status(503).json({ error: "Invalid fulfillment timeout configuration." });
+    return;
+  }
   const cutoff = new Date(Date.now() - timeoutMs);
 
   const result = await FulfillmentRecord.updateMany(
