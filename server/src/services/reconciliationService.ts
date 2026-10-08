@@ -5,11 +5,22 @@ import WebhookDeliveryLog from "../models/WebhookDeliveryLog";
 import ReconciliationReport, { MismatchType } from "../models/ReconciliationReport";
 import { dispatchEvent } from "./webhookDispatcher";
 
-const RECONCILIATION_SECRET = process.env.RECONCILIATION_SECRET || "reconciliation-secret-key-123";
+/**
+ * Reconciliation attestations must never fall back to a publicly known key.
+ * Resolve at call time to support safe key rotation between requests.
+ */
+function reconciliationSigningKey(explicit?: string): string {
+  const secret = explicit ?? process.env.RECONCILIATION_SECRET;
+  if (typeof secret !== "string" || Buffer.byteLength(secret, "utf8") < 32) {
+    throw new Error("Reconciliation signing is not configured.");
+  }
+  return secret;
+}
 
-export function signReport(data: object, secret: string = RECONCILIATION_SECRET): string {
+export function signReport(data: object, secret?: string): string {
   const serialized = JSON.stringify(data);
-  return `sha256=${createHmac("sha256", secret).update(serialized).digest("hex")}`;
+  const signingKey = reconciliationSigningKey(secret);
+  return `sha256=${createHmac("sha256", signingKey).update(serialized).digest("hex")}`;
 }
 
 export interface RunReconciliationOptions {
