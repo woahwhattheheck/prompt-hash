@@ -438,16 +438,24 @@ export const SubmitPromptReport = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
-    await connectDb();
+    // The reporter is the verified wallet session, not a spoofable body value.
+    const principal = res.locals.walletPrincipal?.address;
+    if (typeof principal !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
+    }
+    const { promptId, reporterAddress, reason, description } = req.body ?? {};
+    if (reporterAddress !== undefined &&
+        (typeof reporterAddress !== "string" || reporterAddress.toLowerCase() !== principal.toLowerCase())) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
 
-    const { promptId, reporterAddress, reason, description } = req.body;
-
-    // Validate required fields
-    if (!promptId || !reporterAddress || !reason) {
+    // Validate required fields after proving the caller's identity.
+    if (!promptId || !reason) {
       return res.status(400).json({
-        error: "Missing required fields: promptId, reporterAddress, reason",
+        error: "Missing required fields: promptId, reason",
       });
     }
+    await connectDb();
 
     // Validate reason
     const validReasons = ["quality-issue", "misleading-content", "plagiarism", "harmful-content", "copyright", "other"];
@@ -468,7 +476,7 @@ export const SubmitPromptReport = async (
     // Create new report
     const newReport = new Report({
       promptId,
-      reporterAddress: reporterAddress.toLowerCase(),
+      reporterAddress: principal.toLowerCase(),
       reason,
       description: description || "",
     });
@@ -566,15 +574,20 @@ export const GetPreviewStats = async (
   res: Response,
 ): Promise<Response<any>> => {
   try {
-    await connectDb();
-    const { walletAddress } = req.query;
-
-    if (!walletAddress) {
-      return res.status(400).json({ error: "walletAddress is required." });
+    // The preview totals are owner-only analytics, unlike public preview
+    // ingestion. A query wallet can select only the signed session owner.
+    const principal = res.locals.walletPrincipal?.address;
+    if (typeof principal !== "string") {
+      return res.status(401).json({ error: "Wallet session required." });
     }
-
+    const requestedWallet = req.query.walletAddress;
+    if (requestedWallet !== undefined &&
+        (typeof requestedWallet !== "string" || requestedWallet.toLowerCase() !== principal.toLowerCase())) {
+      return res.status(403).json({ error: "Wallet does not match authenticated session." });
+    }
+    await connectDb();
     const user = await User.findOne({
-      walletAddress: String(walletAddress).toLowerCase(),
+      walletAddress: principal.toLowerCase(),
     });
     if (!user) {
       return res.status(404).json({ error: "User not found." });

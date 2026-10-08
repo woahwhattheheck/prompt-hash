@@ -49,6 +49,25 @@ only when a route needs to reject an inconsistent request. Signing keys retain
 Stellar's case. Existing database lookups may normalize addresses according to
 their current storage contract after authentication.
 
+### Authenticated reporter attribution and private preview analytics
+
+`POST /api/prompts/reports` now uses the verified wallet session to record
+the reporter; an optional legacy `reporterAddress` is a selector, not proof.
+If it disagrees with the signed principal the server returns 403 without
+writing. `GET /api/prompts/preview/stats` now requires that same wallet session
+because it returns per-creator aggregate preview and sales context; optional
+query `walletAddress` may only name the signer. Missing credentials are
+rejected before any database query, while the existing public preview
+ingestion/token and public prompt listing endpoints remain open. The existing
+moderator report-read path is unchanged and requires a separate admin-auth
+review; a signed ordinary wallet is not an admin role.
+
+Focused session-route contract cases are in
+`server/src/routes/walletReportPreviewRoutes.test.ts` (auth boundaries
+mocked; no integration or Mongo assertions). This source change does not
+claim that every wallet-bound family is migrated; fulfillment/admin routes
+and front-end bearer adoption remain distinct acceptance tasks.
+
 ### Authenticated review and governance writes
 
 `POST /api/reviews/submit`, `POST /api/governance/vote/:promptId` and

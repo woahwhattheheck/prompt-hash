@@ -129,10 +129,10 @@ promptRouter.get("/creator/:walletAddress/drafts", GetDraftPrompts);
 // Preview analytics (#257)
 promptRouter.get("/preview/token", GetPreviewToken);
 promptRouter.post("/preview", RecordPreview);
-promptRouter.get("/preview/stats", GetPreviewStats);
+promptRouter.get("/preview/stats", requireWalletPrincipal, GetPreviewStats);
 
 // Report endpoints — off-chain moderation data, does not affect access control
-promptRouter.post("/reports", SubmitPromptReport);
+promptRouter.post("/reports", requireWalletPrincipal, SubmitPromptReport);
 promptRouter.get("/reports", GetPromptReports);
 
 // Re-export action constants for tests / docs consumers
